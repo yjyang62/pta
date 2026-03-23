@@ -104,6 +104,7 @@ constexpr int kPrecision = 4;                         // precision of the memory
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
 
 static char SHAREABLE_HANDLE_VERSION = 1;
+static int64_t g_malloc_call_count = 0;
 enum ShareableHandleType : char {
     SHAREABLE_NPU_MALLOC = 'c',
     SHAREABLE_NPU_EXPANDABLE_SEGMENT = 'e'
@@ -1148,6 +1149,10 @@ public:
 
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
     {
+        g_malloc_call_count++;
+        if (g_malloc_call_count >= 1000) {
+            TORCH_CHECK_WITH(OutOfMemoryError, false, "Simulated OutOfMemoryError: malloc call count exceeded 1000");
+        }
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
         // done outside the lock because we don't know what locks the recorder needs
         // to have...
