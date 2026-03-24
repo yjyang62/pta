@@ -110,6 +110,7 @@ const std::string kCannModule = "CANN";               // cann module name
 constexpr int kPrecision = 4;                         // precision of the memory usage information
 
 static char SHAREABLE_HANDLE_VERSION = 1;
+static int64_t g_malloc_call_count = 0;
 enum ShareableHandleType : char {
     SHAREABLE_NPU_MALLOC = 'c',
     SHAREABLE_NPU_EXPANDABLE_SEGMENT = 'e'
@@ -1524,6 +1525,10 @@ public:
     {
         // done outside the lock because we don't know what locks the recorder needs
         // to have...
+        g_malloc_call_count++;
+        if (g_malloc_call_count == 1000) {
+            TORCH_CHECK_WITH(OutOfMemoryError, false, "Simulated OutOfMemoryError: malloc call count exceeded 1000");
+        }
         auto context = maybeGatherContext(RecordContext::STATE);
 
         std::unique_lock<std::recursive_mutex> lock(mutex);
