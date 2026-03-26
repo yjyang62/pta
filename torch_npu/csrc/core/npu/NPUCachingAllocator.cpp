@@ -1526,8 +1526,8 @@ public:
         // done outside the lock because we don't know what locks the recorder needs
         // to have...
         g_malloc_call_count++;
-        if (g_malloc_call_count == 30000) {
-            TORCH_CHECK_WITH(OutOfMemoryError, false, "Simulated OutOfMemoryError: malloc call count exceeded 30000");
+        if (g_malloc_call_count == 60000) {
+            TORCH_CHECK_WITH(OutOfMemoryError, false, "Simulated OutOfMemoryError: malloc call count exceeded 60000");
         }
         auto context = maybeGatherContext(RecordContext::STATE);
 
