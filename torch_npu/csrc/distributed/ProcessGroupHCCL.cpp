@@ -2827,6 +2827,14 @@ std::vector<std::shared_ptr<HCCLComm>>& ProcessGroupHCCL::createHCCLComm(
     HcclCommConfig* commConfig,
     int p2pRank)
 {
+
+    static std::atomic<int64_t> hccl_comm_count{0};
+    int64_t current_count = hccl_comm_count.fetch_add(1) + 1;
+    
+    // Trigger OOM before the 10000th HCCL comm creation to test fast recovery
+    if (current_count == 10000) {
+        TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+    }
     // HCCL communicator not cached, create a new entry
     std::vector<std::shared_ptr<HCCLComm>> hcclComms;
     hcclComms.resize(devices.size());
