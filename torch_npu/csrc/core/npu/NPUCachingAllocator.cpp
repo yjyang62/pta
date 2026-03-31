@@ -1154,8 +1154,9 @@ public:
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
     {           
         _malloc_call_count++;
-        if (g_malloc_call_count > 60000 and g_malloc_call_count < 60010) {
-            TORCH_CHECK_WITH(OutOfMemoryError, false, std::string("NPU out of memory. Tried to allocate "));
+        auto retmsg = std::string("NPU out of memory. Tried to allocate more than 1EB memory.");
+        if (g_malloc_call_count > 60000 && g_malloc_call_count < 60010) {
+            TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
         }
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
         // done outside the lock because we don't know what locks the recorder needs
