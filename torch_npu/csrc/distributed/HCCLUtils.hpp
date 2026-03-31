@@ -13,9 +13,13 @@
 #include <c10/util/Optional.h>
 #include "third_party/hccl/inc/hccl/hccl.h"
 #include "third_party/hccl/inc/hccl/hccl_types.h"
-
+extern std::atomic<int64_t> g_hccl_check_error_count; 
 #define HCCL_CHECK_ERROR(err_code, ...)                                      \
-    do {                                                                     \
+    do {    
+        int64_t current_count = g_hccl_check_error_count.fetch_add(1) + 1;                                          \
+ 	        if (current_count == 1000) {                              \
+ 	            TORCH_CHECK_WITH(OutOfMemoryError, false, "Simulated OutOfMemoryError: HCCL_CHECK_ERROR called 1000 times"); \
+ 	    }                                                                       \
         auto Error = err_code;                                               \
         if ((Error) != HCCL_SUCCESS) {                                       \
             CHECK_AND_THROW_ERROR_WITH_SPECIFIC_MESSAGE(Error);              \

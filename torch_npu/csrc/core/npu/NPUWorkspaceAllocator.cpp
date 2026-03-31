@@ -403,7 +403,6 @@ static void uncached_delete(void* ptr)
     NPU_CHECK_WARN(c10_npu::acl::AclrtSynchronizeDeviceWithTimeout());
     NPU_CHECK_ERROR(aclrtFree(ptr));
 }
-std::atomic<int> g_malloc_call_count{0};
 static void local_raw_delete(void* ptr);
 
 class NpuWorkspaceAllocator : public c10::Allocator {
@@ -428,10 +427,6 @@ public:
     {
         auto src_ptr = static_cast<void*>(device_allocator[device]->getStreamPtr(stream));
         *new_ptr = static_cast<void*>(device_allocator[device]->malloc(size, stream));
-        int current_count = g_malloc_call_count.fetch_add(1) + 1;
-        if (current_count == 60000) {
-            (*new_ptr) = nullptr;
-        }
         if ((*new_ptr) == nullptr) {
             size_t device_free;
             size_t device_total;
