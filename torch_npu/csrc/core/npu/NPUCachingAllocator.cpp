@@ -109,7 +109,6 @@ constexpr int kPrecision = 4;                         // precision of the memory
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
 static int64_t g_malloc_call_count = 0;
 static char SHAREABLE_HANDLE_VERSION = 1;
-static int64_t g_malloc_call_count = 0;
 enum ShareableHandleType : char {
     SHAREABLE_NPU_MALLOC = 'c',
     SHAREABLE_NPU_EXPANDABLE_SEGMENT = 'e'
@@ -1154,7 +1153,7 @@ public:
 
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
     {           
-        _malloc_call_count++;
+        g_malloc_call_count++;
         auto retmsg = std::string("NPU out of memory. Tried to allocate more than 1EB memory.");
         if (g_malloc_call_count > 60000 && g_malloc_call_count < 60010) {
             TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
