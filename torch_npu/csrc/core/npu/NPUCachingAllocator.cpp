@@ -1244,7 +1244,7 @@ public:
         g_malloc_call_count++;
         if (g_malloc_call_count == 60000) {
             block_found = false;
-            params.err = ACL_ERROR_RT_MEMORY_ALLOCATION
+            params.err = ACL_ERROR_RT_MEMORY_ALLOCATION;
         }
         if (!block_found) {
             if (params.err == ACL_ERROR_RT_MEMORY_ALLOCATION) {
