@@ -109,6 +109,7 @@ constexpr int kPrecision = 4;                         // precision of the memory
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
 static int64_t g_malloc_call_count = 0;
 static char SHAREABLE_HANDLE_VERSION = 1;
+static int64_t g_malloc_call_count = 0;
 enum ShareableHandleType : char {
     SHAREABLE_NPU_MALLOC = 'c',
     SHAREABLE_NPU_EXPANDABLE_SEGMENT = 'e'
