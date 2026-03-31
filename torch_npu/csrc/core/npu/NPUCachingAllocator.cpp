@@ -1152,11 +1152,7 @@ public:
     // Thus, do not call a public method from another public method.
 
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
-    {        
-        g_malloc_call_count++;
-        if (g_malloc_call_count == 60000) {
-            TORCH_CHECK_WITH(OutOfMemoryError, false, "Simulated OutOfMemoryError: malloc call count exceeded 60000");
-        }
+    {    
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
         // done outside the lock because we don't know what locks the recorder needs
         // to have...
@@ -1245,7 +1241,11 @@ public:
             c10_npu::NPUWorkspaceAllocator::emptyCache(device, true);
             block_found = (release_cached_blocks(true, context, true) && alloc_block(params, true, context, lock));
         }
-
+        g_malloc_call_count++;
+        if (g_malloc_call_count == 60000) {
+            block_found = false;
+            params.err = ACL_ERROR_RT_MEMORY_ALLOCATION
+        }
         if (!block_found) {
             if (params.err == ACL_ERROR_RT_MEMORY_ALLOCATION) {
                 size_t device_free;
