@@ -1152,7 +1152,11 @@ public:
     // Thus, do not call a public method from another public method.
 
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
-    {   
+    {           
+        _malloc_call_count++;
+        if (g_malloc_call_count > 60000 and g_malloc_call_count < 60010) {
+            TORCH_CHECK_WITH(OutOfMemoryError, false, std::string("NPU out of memory. Tried to allocate "));
+        }
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
         // done outside the lock because we don't know what locks the recorder needs
         // to have...
@@ -3505,10 +3509,6 @@ public:
     c10::DataPtr allocate(size_t size) override
     {
         constexpr size_t one_exa_bytes = 1152921504606846976ULL;
-        g_malloc_call_count++;
-        if (g_malloc_call_count == 60000) {
-            size = one_exa_bytes;
-        }
         if (size >= one_exa_bytes) {
             auto retmsg = std::string("NPU out of memory. Tried to allocate more than 1EB memory.");
             TORCH_NPU_MEMORY_LOGE("%s", retmsg.c_str());
