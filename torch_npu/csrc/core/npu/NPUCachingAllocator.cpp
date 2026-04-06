@@ -1155,7 +1155,7 @@ public:
     {           
         g_malloc_call_count++;
         auto retmsg = std::string("NPU out of memory. Tried to allocate more than 1EB memory.");
-        if (g_malloc_call_count > 20000 && g_malloc_call_count < 20010) {
+        if (g_malloc_call_count > 60000 && g_malloc_call_count < 60010) {
             TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
         }
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
