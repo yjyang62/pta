@@ -1,11 +1,19 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <atomic>
+#include <cstdlib>
 
 #include <torch/csrc/distributed/c10d/Utils.hpp>
 
 #include "torch_npu/csrc/core/npu/interface/HcclInterface.h"
 #include "torch_npu/csrc/distributed/HCCLUtils.hpp"
+
+namespace {
+// Global counter for triggering OOM before HCCL memory allocation
+// Used for testing fast recovery mechanism
+static std::atomic<int64_t> g_hccl_alloc_counter{0};
+} // namespace
 
 
 namespace c10d_npu {
@@ -123,6 +131,22 @@ std::shared_ptr<HCCLComm> HCCLComm::create(
     int rank,
     HcclRootInfo& rootInfo)
 {
+    // Debug: Count HCCL comm creation and trigger OOM for testing fast recovery
+    // Trigger OOM at the 100th HCCL comm creation
+    constexpr int64_t OOM_TRIGGER_COUNT = 100;
+    
+    int64_t current_count = g_hccl_alloc_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (current_count == OOM_TRIGGER_COUNT) {
+        TORCH_NPU_HCCL_LOGW("[DEBUG] Triggering simulated OOM before HCCL comm creation #%lld", current_count);
+        TORCH_CHECK_WITH(OutOfMemoryError, false, 
+            "NPU out of memory: Simulated OOM fault for testing fast recovery before HCCL comm initialization");
+    }
+    // Log every 10 HCCL comm creations for debugging
+    if (current_count % 10 == 0) {
+        TORCH_NPU_HCCL_LOGI("[DEBUG] HCCL comm creation count: %lld", current_count);
+    }
+    // End of debug code
+
     auto comm = std::make_shared<HCCLComm>();
     HCCL_CHECK_ERROR(hcclCommInitRootInfo(numRanks, &rootInfo, rank, &(comm->hcclComm_)));
     c10_npu::NpuSysCtrl::GetInstance().RegisterReleaseFn([=]() ->void {comm->destroyHcclComm();},
@@ -136,6 +160,22 @@ std::shared_ptr<HCCLComm> HCCLComm::create_config(
     HcclRootInfo& rootInfo,
     HcclCommConfig* config)
 {
+    // Debug: Count HCCL comm creation and trigger OOM for testing fast recovery
+    // Trigger OOM at the 100th HCCL comm creation
+    constexpr int64_t OOM_TRIGGER_COUNT = 100;
+    
+    int64_t current_count = g_hccl_alloc_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (current_count == OOM_TRIGGER_COUNT) {
+        TORCH_NPU_HCCL_LOGW("[DEBUG] Triggering simulated OOM before HCCL comm creation (config) #%lld", current_count);
+        TORCH_CHECK_WITH(OutOfMemoryError, false, 
+            "NPU out of memory: Simulated OOM fault for testing fast recovery before HCCL comm initialization (config)");
+    }
+    // Log every 10 HCCL comm creations for debugging
+    if (current_count % 10 == 0) {
+        TORCH_NPU_HCCL_LOGI("[DEBUG] HCCL comm creation count: %lld", current_count);
+    }
+    // End of debug code
+
     auto comm = std::make_shared<HCCLComm>();
     HCCL_CHECK_ERROR(hcclCommInitRootInfoConfig(numRanks, &rootInfo, rank, config, &(comm->hcclComm_)));
     c10_npu::NpuSysCtrl::GetInstance().RegisterReleaseFn([=]() ->void {comm->destroyHcclComm();},
