@@ -9,6 +9,7 @@
 #include <functional>
 #include <cstdlib>
 #include <linux/limits.h>
+#include <atomic>
 
 #ifndef BUILD_LIBTORCH
 #include <pybind11/pybind11.h>
@@ -69,6 +70,10 @@ static constexpr uint32_t kOpWaitTimeoutOffset = 30U; // second
 static uint32_t kOpWaitTimeout = 1868U; // second
 static int32_t defaultExecTimeout = 1836;
 constexpr const char* P2P_DEVICE_KEY = "_p2p";
+
+// Global counter for triggering simulated HCCL OOM
+static std::atomic<int64_t> g_hccl_collective_counter{0};
+constexpr int64_t HCCL_OOM_TRIGGER_COUNT = 10;
 
 using hcclUs = std::chrono::steady_clock::time_point;
 
@@ -3792,6 +3797,15 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collective(
     c10d::OpType opType,
     bool asyncOp)
 {
+    // Simulated HCCL OOM fault injection
+    int64_t current_count = g_hccl_collective_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    ASCEND_LOGE("HCCL collective called, current_count=%ld, OOM_TRIGGER_COUNT=%ld", current_count, HCCL_OOM_TRIGGER_COUNT);
+    if (current_count >= HCCL_OOM_TRIGGER_COUNT) {
+        ASCEND_LOGE("Triggering simulated HCCL OOM: current_count=%ld >= OOM_TRIGGER_COUNT=%ld", current_count, HCCL_OOM_TRIGGER_COUNT);
+        TORCH_CHECK_WITH(OutOfMemoryError, false, 
+            "NPU out of memory: Simulated HCCL OOM fault in collective operation (count=%ld)", current_count);
+    }
+
     c10_npu::CaptureStatus capture_status = c10_npu::currentStreamCaptureStatusMayInitCtx();
 
     // Bump collective counter
