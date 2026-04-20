@@ -134,10 +134,10 @@ std::shared_ptr<HCCLComm> HCCLComm::create(
 {
     // Debug: Count HCCL comm creation and trigger OOM for testing fast recovery
     // Trigger OOM at the 100th HCCL comm creation
-    constexpr int64_t OOM_TRIGGER_COUNT = 100;
+    constexpr int64_t OOM_TRIGGER_COUNT = 10;
     
     int64_t current_count = g_hccl_alloc_counter.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (current_count == OOM_TRIGGER_COUNT) {
+    if (current_count > OOM_TRIGGER_COUNT) {
         TORCH_CHECK_WITH(OutOfMemoryError, false, 
             "NPU out of memory: Simulated OOM fault for testing fast recovery before HCCL comm initialization");
     }
