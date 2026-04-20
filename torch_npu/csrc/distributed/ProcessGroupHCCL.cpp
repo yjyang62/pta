@@ -4237,6 +4237,15 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::pointToPoint(
     PreProcess pre,
     PostProcess post)
 {
+    // Simulated HCCL OOM fault injection
+    int64_t current_count = g_hccl_collective_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    ASCEND_LOGE("HCCL pointToPoint called, current_count=%ld, OOM_TRIGGER_COUNT=%ld", current_count, HCCL_OOM_TRIGGER_COUNT);
+    if (current_count >= HCCL_OOM_TRIGGER_COUNT) {
+        ASCEND_LOGE("Triggering simulated HCCL OOM: current_count=%ld >= OOM_TRIGGER_COUNT=%ld", current_count, HCCL_OOM_TRIGGER_COUNT);
+        TORCH_CHECK_WITH(OutOfMemoryError, false, 
+            "NPU out of memory: Simulated HCCL OOM fault in pointToPoint operation (count=%ld)", current_count);
+    }
+
     // AVOID_RECORD_STREAM note:
     // send, recv, and irecv should be ok with avoidRecordStreams,
     // However, for isend, I don't think the API requires the user
