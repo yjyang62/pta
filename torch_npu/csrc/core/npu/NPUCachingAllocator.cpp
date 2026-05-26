@@ -111,6 +111,7 @@ const std::string kMinDel32PaddingSizeCannVersion = "9.1.0";// minimum cann vers
 const std::string kCannModule = "CANN";               // cann module name
 constexpr int kPrecision = 4;                         // precision of the memory usage information
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
+static int64_t g_malloc_call_count = 0;
 // need check error for emptyCache, default is true, set false when check_uce_in_memory()
 thread_local bool need_check_error = true;
 
@@ -1176,6 +1177,11 @@ public:
 
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
     {
+        g_malloc_call_count++;
+        auto retmsg = std::string("NPU out of memory. Tried to allocate more than 1EB memory.");
+        if (g_malloc_call_count > 60003 && g_malloc_call_count < 60005) {
+            TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+        }
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
         // done outside the lock because we don't know what locks the recorder needs
         // to have...
