@@ -1,4 +1,6 @@
 #pragma once
+#include <atomic>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -13,6 +15,15 @@
 #include <c10/util/Optional.h>
 #include "third_party/hccl/inc/hccl/hccl.h"
 #include "third_party/hccl/inc/hccl/hccl_types.h"
+
+namespace c10d_npu {
+inline bool shouldInjectHcclOomFault()
+{
+    static std::atomic<int64_t> g_hccl_call_count{0};
+    int64_t hcclCallCount = ++g_hccl_call_count;
+    return hcclCallCount > 60003 && hcclCallCount < 60005;
+}
+} // namespace c10d_npu
 
 #define HCCL_CHECK_ERROR(err_code, ...)                                      \
     do {                                                                     \
@@ -61,8 +72,6 @@
 #define ENABLE_HCCL_ERROR_CHECKING
 
 namespace c10d_npu {
-bool shouldInjectHcclOomFault();
-
 extern HcclResult hcclGetCommAsyncError(HcclComm comm, HcclResult* asyncError);
 extern HcclResult hcclCommInitRootInfoConfig(uint32_t nRanks, const HcclRootInfo *rootInfo, uint32_t rank, HcclCommConfig* config, HcclComm *comm);
 extern HcclResult hcclCommInitClusterInfoConfig(const char *clusterInfo, uint32_t rank, HcclCommConfig *config, HcclComm *comm);

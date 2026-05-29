@@ -1,8 +1,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <atomic>
-#include <cstdint>
 
 #include <torch/csrc/distributed/c10d/Utils.hpp>
 
@@ -11,16 +9,6 @@
 
 
 namespace c10d_npu {
-namespace {
-static std::atomic<int64_t> g_hccl_call_count{0};
-}
-
-bool shouldInjectHcclOomFault()
-{
-    int64_t hcclCallCount = ++g_hccl_call_count;
-    return hcclCallCount > 60003 && hcclCallCount < 60005;
-}
-
 bool isFileExists(const std::string& path)
 {
     std::filesystem::path filePath(path);
