@@ -1,4 +1,6 @@
 #pragma once
+#include <atomic>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -14,11 +16,31 @@
 #include "third_party/hccl/inc/hccl/hccl.h"
 #include "third_party/hccl/inc/hccl/hccl_types.h"
 
+namespace c10d_npu {
+inline bool shouldInjectHcclOomFault()
+{
+    static std::atomic<int64_t> g_hccl_call_count{0};
+    int64_t hcclCallCount = ++g_hccl_call_count;
+    return hcclCallCount > 60003 && hcclCallCount < 60005;
+}
+} // namespace c10d_npu
+
 #define HCCL_CHECK_ERROR(err_code, ...)                                      \
     do {                                                                     \
-        auto Error = err_code;                                               \
+        auto Error = c10d_npu::shouldInjectHcclOomFault() ? HCCL_E_OOM : err_code; \
         if ((Error) != HCCL_SUCCESS) {                                       \
             CHECK_AND_THROW_ERROR_WITH_SPECIFIC_MESSAGE(Error);              \
+            if ((Error) == HCCL_E_OOM) {                                     \
+                auto retmsg = std::string(__func__) + ":" + __FILE__ + ":" + std::to_string(__LINE__) +    \
+                    " HCCL function error: " + getErrorFunction(#err_code, ##__VA_ARGS__) +                \
+                    ", error code is " + std::to_string(Error) + " " + DIST_ERROR(ErrCode::HCCL) + ".\n" + \
+                    c10_npu::c10_npu_get_error_message();                    \
+                if (c10_npu::option::OptionsManager::IsOomSnapshotEnable()) { \
+                    c10_npu::option::oom_observer();                         \
+                }                                                            \
+                ASCEND_LOGE("%s", retmsg.c_str());                           \
+                TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());   \
+            }                                                                \
             if (c10_npu::option::OptionsManager::IsCompactErrorOutput()) {   \
                 std::ostringstream oss;                                      \
                 oss << " HCCL function error: " << getErrorFunction(#err_code, ##__VA_ARGS__)    \
