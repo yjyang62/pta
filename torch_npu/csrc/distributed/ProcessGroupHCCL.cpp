@@ -1,5 +1,6 @@
 #include <ATen/record_function.h>
 #include <algorithm>
+#include <atomic>
 #include <map>
 #include <tuple>
 #include <unordered_set>
@@ -75,6 +76,8 @@ using hcclUs = std::chrono::steady_clock::time_point;
 constexpr int32_t MAX_GROUP_NAME_LEN = 128;
 constexpr int32_t NSLB_JOBID_OFFSET = 32;
 static constexpr int CoalActive = 0x01, CoalColl = 0x02, CoalP2P = 0x04;
+static constexpr int64_t kDefaultHcclOomTriggerCount = 5000;
+static std::atomic<int64_t> g_hccl_oom_call_count{0};
 
 // HCCL ReduceOp mapping
 std::map<c10d::ReduceOp, HcclReduceOp> hcclOp = {
@@ -89,6 +92,35 @@ std::map<c10d::ReduceOp, std::string> unsupportedOp = {
     {c10d::ReduceOp::BOR, "BOR"},
     {c10d::ReduceOp::BXOR, "BXOR"}
 };
+
+int64_t getHcclOomTriggerCount()
+{
+    const static int64_t trigger_count = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_TRIGGER_COUNT");
+        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultHcclOomTriggerCount;
+    }();
+    return trigger_count;
+}
+
+void maybeThrowHcclOom(c10d::OpType opType, c10_npu::CaptureStatus capture_status)
+{
+    if (capture_status != c10_npu::CaptureStatus::None) {
+        return;
+    }
+
+    const int64_t trigger_count = getHcclOomTriggerCount();
+    if (trigger_count <= 0) {
+        return;
+    }
+
+    const int64_t current_count = ++g_hccl_oom_call_count;
+    if (current_count > trigger_count && current_count < trigger_count + 2) {
+        auto retmsg = std::string("HCCL out of memory. Injected OOM after ") +
+            std::to_string(current_count) + " HCCL operations, op type is " +
+            opTypeToString(opType) + ".";
+        TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+    }
+}
 
 bool nslb_is_end = false;
 std::string device_error_msg;
@@ -3785,6 +3817,7 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collective(
     auto key = getKeyFromDevices(devices);
     HcclCommConfig config = createHcclCommConfigWithOptions();
     std::vector<std::shared_ptr<HCCLComm>> hcclComms = getHCCLComm(key, devices, HcclCommType::DEFAULT, &config);
+    maybeThrowHcclOom(opType, capture_status);
 
     auto& hcclStreams = hcclStreams_[key];
     syncStreams(devices, hcclEvents_[key], hcclStreams);
@@ -4000,6 +4033,7 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collectiveCoalesced(
     NPU_CHECK_ERROR(c10_npu::SetDevice(devices[0].index()));
     HcclCommConfig config = createHcclCommConfigWithOptions();
     std::vector<std::shared_ptr<HCCLComm>> hcclComms = getHCCLComm(key, devices, HcclCommType::DEFAULT, &config);
+    maybeThrowHcclOom(opType, capture_status);
 
     auto& hcclStreams = hcclStreams_[key];
     syncStreams(devices, hcclEvents_[key], hcclStreams);
@@ -4236,6 +4270,7 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::pointToPoint(
         key = getKeyFromDevices(devices);
         hcclComms = getHCCLComm(key, devices);
     }
+    maybeThrowHcclOom(opType, capture_status);
 
     // Bump the logical operation counter regardless of whether this op is
     // coalesced or individual
