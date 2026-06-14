@@ -111,8 +111,7 @@ const std::string kMinDriverVersion = "25.0.RC1";     // minimum driver version 
 const std::string kCannModule = "CANN";               // cann module name
 constexpr int kPrecision = 4;                         // precision of the memory usage information
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
-constexpr int64_t kDefaultPtaOomTriggerCount = 1000;
-constexpr size_t kDefaultPtaOomMinAllocSize = 64 * 1024 * 1024;
+constexpr int64_t kDefaultPtaOomTriggerCount = 30004;
 static std::atomic<int64_t> g_pta_oom_candidate_count{0};
 static std::atomic<bool> g_pta_oom_triggered{false};
 static char SHAREABLE_HANDLE_VERSION = 1;
@@ -132,86 +131,14 @@ int64_t getPtaOomTriggerCount()
     return trigger_count;
 }
 
-size_t getPtaOomMinAllocSize()
-{
-    const static size_t min_alloc_size = []() -> size_t {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_MIN_ALLOC_BYTES");
-        int64_t env_flag = (env_val != nullptr) ? strtol(env_val, nullptr, 10) :
-            static_cast<int64_t>(kDefaultPtaOomMinAllocSize);
-        return env_flag > 0 ? static_cast<size_t>(env_flag) : 0;
-    }();
-    return min_alloc_size;
-}
-
-size_t getPtaOomMaxAllocSize()
-{
-    const static size_t max_alloc_size = []() -> size_t {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_MAX_ALLOC_BYTES");
-        int64_t env_flag = (env_val != nullptr) ? strtol(env_val, nullptr, 10) : -1;
-        return env_flag > 0 ? static_cast<size_t>(env_flag) : 0;
-    }();
-    return max_alloc_size;
-}
-
-int64_t getPtaOomTargetDevice()
-{
-    const static int64_t target_device = []() -> int64_t {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_DEVICE");
-        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : -1;
-    }();
-    return target_device;
-}
-
-int64_t getPtaOomTargetRank()
-{
-    const static int64_t target_rank = []() -> int64_t {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_RANK");
-        if (env_val != nullptr) {
-            return strtol(env_val, nullptr, 10);
-        }
-        return -1;
-    }();
-    return target_rank;
-}
-
-int64_t getCurrentRank()
-{
-    char *rank = std::getenv("RANK");
-    return rank != nullptr ? strtol(rank, nullptr, 10) : -1;
-}
-
-bool isPtaOomEnabled()
-{
-    const static bool enabled = []() -> bool {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_ENABLE");
-        return (env_val != nullptr) && (strtol(env_val, nullptr, 10) != 0);
-    }();
-    return enabled;
-}
-
 void maybeThrowPtaOom(int device, size_t size)
 {
-    if (!isPtaOomEnabled() || g_pta_oom_triggered.load()) {
+    if (g_pta_oom_triggered.load() || size == 0) {
         return;
     }
 
     const int64_t trigger_count = getPtaOomTriggerCount();
-    if (trigger_count <= 0 || size == 0 || size < getPtaOomMinAllocSize()) {
-        return;
-    }
-
-    const size_t max_alloc_size = getPtaOomMaxAllocSize();
-    if (max_alloc_size != 0 && size > max_alloc_size) {
-        return;
-    }
-
-    const int64_t target_device = getPtaOomTargetDevice();
-    if (target_device >= 0 && target_device != device) {
-        return;
-    }
-
-    const int64_t target_rank = getPtaOomTargetRank();
-    if (target_rank >= 0 && target_rank != getCurrentRank()) {
+    if (trigger_count <= 0) {
         return;
     }
 
@@ -223,7 +150,7 @@ void maybeThrowPtaOom(int device, size_t size)
     if (current_count > trigger_count && current_count < trigger_count + 2) {
         g_pta_oom_triggered.store(true);
         auto retmsg = std::string("NPU out of memory. Injected PTA OOM after ") +
-            std::to_string(current_count) + " eligible allocations. Tried to allocate " +
+            std::to_string(current_count) + " normal tensor allocations. Tried to allocate " +
             format_size(size) + " on NPU " + std::to_string(device) + ".";
         TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
     }
