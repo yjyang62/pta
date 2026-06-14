@@ -112,7 +112,7 @@ const std::string kCannModule = "CANN";               // cann module name
 constexpr int kPrecision = 4;                         // precision of the memory usage information
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
 constexpr int64_t kDefaultPtaOomTriggerCount = 1000;
-constexpr size_t kDefaultPtaOomMinAllocSize = kSmallSize;
+constexpr size_t kDefaultPtaOomMinAllocSize = 64 * 1024 * 1024;
 static std::atomic<int64_t> g_pta_oom_candidate_count{0};
 static std::atomic<bool> g_pta_oom_triggered{false};
 static char SHAREABLE_HANDLE_VERSION = 1;
@@ -143,6 +143,16 @@ size_t getPtaOomMinAllocSize()
     return min_alloc_size;
 }
 
+size_t getPtaOomMaxAllocSize()
+{
+    const static size_t max_alloc_size = []() -> size_t {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_MAX_ALLOC_BYTES");
+        int64_t env_flag = (env_val != nullptr) ? strtol(env_val, nullptr, 10) : -1;
+        return env_flag > 0 ? static_cast<size_t>(env_flag) : 0;
+    }();
+    return max_alloc_size;
+}
+
 int64_t getPtaOomTargetDevice()
 {
     const static int64_t target_device = []() -> int64_t {
@@ -152,11 +162,29 @@ int64_t getPtaOomTargetDevice()
     return target_device;
 }
 
+int64_t getPtaOomTargetRank()
+{
+    const static int64_t target_rank = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_RANK");
+        if (env_val != nullptr) {
+            return strtol(env_val, nullptr, 10);
+        }
+        return std::getenv("RANK") != nullptr ? 0 : -1;
+    }();
+    return target_rank;
+}
+
+int64_t getCurrentRank()
+{
+    char *rank = std::getenv("RANK");
+    return rank != nullptr ? strtol(rank, nullptr, 10) : -1;
+}
+
 bool isPtaOomEnabled()
 {
     const static bool enabled = []() -> bool {
         char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_ENABLE");
-        return (env_val == nullptr) || (strtol(env_val, nullptr, 10) != 0);
+        return (env_val != nullptr) && (strtol(env_val, nullptr, 10) != 0);
     }();
     return enabled;
 }
@@ -172,8 +200,18 @@ void maybeThrowPtaOom(int device, size_t size)
         return;
     }
 
+    const size_t max_alloc_size = getPtaOomMaxAllocSize();
+    if (max_alloc_size != 0 && size > max_alloc_size) {
+        return;
+    }
+
     const int64_t target_device = getPtaOomTargetDevice();
     if (target_device >= 0 && target_device != device) {
+        return;
+    }
+
+    const int64_t target_rank = getPtaOomTargetRank();
+    if (target_rank >= 0 && target_rank != getCurrentRank()) {
         return;
     }
 
