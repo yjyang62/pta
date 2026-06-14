@@ -115,9 +115,10 @@ void maybeThrowHcclOom(c10d::OpType opType, c10_npu::CaptureStatus capture_statu
 
     const int64_t current_count = ++g_hccl_oom_call_count;
     if (current_count > trigger_count && current_count < trigger_count + 2) {
-        auto retmsg = std::string("HCCL out of memory. Injected OOM after ") +
-            std::to_string(current_count) + " HCCL operations, op type is " +
-            opTypeToString(opType) + ".";
+        auto retmsg = std::string("HCCL function error: Failed to allocate memory. "
+            "Injected HCCL OOM after ") + std::to_string(current_count) +
+            " HCCL operations, op type is " + opTypeToString(opType) +
+            ", error code is " + std::to_string(HCCL_E_OOM) + " " + DIST_ERROR(ErrCode::HCCL) + ".";
         TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
     }
 }
@@ -3817,7 +3818,6 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collective(
     auto key = getKeyFromDevices(devices);
     HcclCommConfig config = createHcclCommConfigWithOptions();
     std::vector<std::shared_ptr<HCCLComm>> hcclComms = getHCCLComm(key, devices, HcclCommType::DEFAULT, &config);
-    maybeThrowHcclOom(opType, capture_status);
 
     auto& hcclStreams = hcclStreams_[key];
     syncStreams(devices, hcclEvents_[key], hcclStreams);
@@ -3966,7 +3966,9 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collective(
                 c10_npu::SetStreamResLimit(hcclStream, c10_npu::acl::ACL_RT_DEV_RES_VECTOR_CORE, current_aiv_num);
             }
             hcclUs startut = std::chrono::steady_clock::now();
-            HCCL_CHECK_ERROR(fn(inputs[i], outputs[i], hcclComms[i]->getHcclComm(), hcclStream, work->is_dispatched), opTypeToString(opType).c_str());
+            auto hcclResult = fn(inputs[i], outputs[i], hcclComms[i]->getHcclComm(), hcclStream, work->is_dispatched);
+            HCCL_CHECK_ERROR(hcclResult, opTypeToString(opType).c_str());
+            maybeThrowHcclOom(opType, capture_status);
             if (c10_npu::option::OptionsManager::GetMultiStreamMemoryReuse() == c10_npu::option::ERASE_RECORD_STREAM) {
                 work->recorded_outputs_.push_back(
                     std::make_pair(outputs[i].storage().getWeakStorageImpl(), hcclStream));
@@ -4033,7 +4035,6 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collectiveCoalesced(
     NPU_CHECK_ERROR(c10_npu::SetDevice(devices[0].index()));
     HcclCommConfig config = createHcclCommConfigWithOptions();
     std::vector<std::shared_ptr<HCCLComm>> hcclComms = getHCCLComm(key, devices, HcclCommType::DEFAULT, &config);
-    maybeThrowHcclOom(opType, capture_status);
 
     auto& hcclStreams = hcclStreams_[key];
     syncStreams(devices, hcclEvents_[key], hcclStreams);
@@ -4190,7 +4191,9 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collectiveCoalesced(
                 c10_npu::SetStreamResLimit(hcclStream, c10_npu::acl::ACL_RT_DEV_RES_VECTOR_CORE, current_aiv_num);
             }
             hcclUs startut = std::chrono::steady_clock::now();
-            HCCL_CHECK_ERROR(fn(inputs[i], outputs[i], hcclComms[0]->getHcclComm(), hcclStream, work->is_dispatched), opTypeToString(opType).c_str());
+            auto hcclResult = fn(inputs[i], outputs[i], hcclComms[0]->getHcclComm(), hcclStream, work->is_dispatched);
+            HCCL_CHECK_ERROR(hcclResult, opTypeToString(opType).c_str());
+            maybeThrowHcclOom(opType, capture_status);
             if (c10_npu::option::OptionsManager::GetMultiStreamMemoryReuse() == c10_npu::option::ERASE_RECORD_STREAM) {
                 work->recorded_outputs_.push_back(
                     std::make_pair(outputs[i].storage().getWeakStorageImpl(), hcclStream));
@@ -4270,7 +4273,6 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::pointToPoint(
         key = getKeyFromDevices(devices);
         hcclComms = getHCCLComm(key, devices);
     }
-    maybeThrowHcclOom(opType, capture_status);
 
     // Bump the logical operation counter regardless of whether this op is
     // coalesced or individual
@@ -4441,13 +4443,15 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::pointToPoint(
                 };
                 at_npu::native::OpCommand::RunOpApiV3("hcclGroupStart", hccl_call);
             }
-            HCCL_CHECK_ERROR(fn(tensors[i], hcclComms[i]->getHcclComm(), hcclStream, is_dispatched, p2pTargetRank), opTypeToString(opType).c_str());
+            auto hcclResult = fn(tensors[i], hcclComms[i]->getHcclComm(), hcclStream, is_dispatched, p2pTargetRank);
             if (coalescing_state_) {
                 auto hccl_call = [this]() -> HcclResult {
                     return hcclGroupEnd();
                 };
                 at_npu::native::OpCommand::RunOpApiV3("hcclGroupEnd", hccl_call);
             }
+            HCCL_CHECK_ERROR(hcclResult, opTypeToString(opType).c_str());
+            maybeThrowHcclOom(opType, capture_status);
         }
     }
 
