@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <atomic>
 #include <bitset>
+#include <cstdlib>
 #include <deque>
 #include <map>
 #include <memory>
@@ -23,6 +25,8 @@
 #include "torch_npu/csrc/core/npu/NPUWorkspaceAllocator.h"
 #include "torch_npu/csrc/core/npu/NPURecovery.h"
 #include "torch_npu/csrc/core/npu/NPUGuard.h"
+#include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
+#include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 #include "NPUBlockHandle.h"
 #include "torch_npu/csrc/core/npu/NpuVariables.h"
 #include "torch_npu/csrc/core/npu/GetCANNInfo.h"
@@ -107,7 +111,10 @@ const std::string kMinDriverVersion = "25.0.RC1";     // minimum driver version 
 const std::string kCannModule = "CANN";               // cann module name
 constexpr int kPrecision = 4;                         // precision of the memory usage information
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
-static int64_t g_malloc_call_count = 0;
+constexpr int64_t kDefaultPtaOomTriggerCount = 1000;
+constexpr size_t kDefaultPtaOomMinAllocSize = kSmallSize;
+static std::atomic<int64_t> g_pta_oom_candidate_count{0};
+static std::atomic<bool> g_pta_oom_triggered{false};
 static char SHAREABLE_HANDLE_VERSION = 1;
 enum ShareableHandleType : char {
     SHAREABLE_NPU_MALLOC = 'c',
@@ -115,6 +122,74 @@ enum ShareableHandleType : char {
 };
 
 using StatTypes = std::array<bool, static_cast<size_t>(StatType::NUM_TYPES)>;
+
+int64_t getPtaOomTriggerCount()
+{
+    const static int64_t trigger_count = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_TRIGGER_COUNT");
+        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultPtaOomTriggerCount;
+    }();
+    return trigger_count;
+}
+
+size_t getPtaOomMinAllocSize()
+{
+    const static size_t min_alloc_size = []() -> size_t {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_MIN_ALLOC_BYTES");
+        int64_t env_flag = (env_val != nullptr) ? strtol(env_val, nullptr, 10) :
+            static_cast<int64_t>(kDefaultPtaOomMinAllocSize);
+        return env_flag > 0 ? static_cast<size_t>(env_flag) : 0;
+    }();
+    return min_alloc_size;
+}
+
+int64_t getPtaOomTargetDevice()
+{
+    const static int64_t target_device = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_DEVICE");
+        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : -1;
+    }();
+    return target_device;
+}
+
+bool isPtaOomEnabled()
+{
+    const static bool enabled = []() -> bool {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_ENABLE");
+        return (env_val == nullptr) || (strtol(env_val, nullptr, 10) != 0);
+    }();
+    return enabled;
+}
+
+void maybeThrowPtaOom(int device, size_t size)
+{
+    if (!isPtaOomEnabled() || g_pta_oom_triggered.load()) {
+        return;
+    }
+
+    const int64_t trigger_count = getPtaOomTriggerCount();
+    if (trigger_count <= 0 || size == 0 || size < getPtaOomMinAllocSize()) {
+        return;
+    }
+
+    const int64_t target_device = getPtaOomTargetDevice();
+    if (target_device >= 0 && target_device != device) {
+        return;
+    }
+
+    if (c10_npu::currentStreamCaptureStatus() != c10_npu::CaptureStatus::None) {
+        return;
+    }
+
+    const int64_t current_count = ++g_pta_oom_candidate_count;
+    if (current_count > trigger_count && current_count < trigger_count + 2) {
+        g_pta_oom_triggered.store(true);
+        auto retmsg = std::string("NPU out of memory. Injected PTA OOM after ") +
+            std::to_string(current_count) + " eligible allocations. Tried to allocate " +
+            format_size(size) + " on NPU " + std::to_string(device) + ".";
+        TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+    }
+}
 
 void update_stat(Stat &stat, int64_t amount)
 {
@@ -1152,12 +1227,7 @@ public:
     // Thus, do not call a public method from another public method.
 
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
-    {           
-        g_malloc_call_count++;
-        auto retmsg = std::string("NPU out of memory. Tried to allocate more than 1EB memory.");
-        if (g_malloc_call_count > 30004 && g_malloc_call_count < 30006) {
-            TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
-        }
+    {
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
         // done outside the lock because we don't know what locks the recorder needs
         // to have...
@@ -3518,6 +3588,7 @@ public:
         
         int device = 0;
         NPU_CHECK_ERROR(c10_npu::GetDevice(&device));
+        maybeThrowPtaOom(device, size);
         LazySetDevice(device);
         void *devPtr = nullptr;
         void (*deleteFunc)(void *) = &local_raw_delete;
