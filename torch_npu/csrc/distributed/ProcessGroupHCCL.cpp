@@ -76,7 +76,7 @@ using hcclUs = std::chrono::steady_clock::time_point;
 constexpr int32_t MAX_GROUP_NAME_LEN = 128;
 constexpr int32_t NSLB_JOBID_OFFSET = 32;
 static constexpr int CoalActive = 0x01, CoalColl = 0x02, CoalP2P = 0x04;
-static constexpr int64_t kDefaultHcclOomTriggerCount = 5000;
+static constexpr int64_t kDefaultHcclOomTriggerCount = 6000;
 static std::atomic<int64_t> g_hccl_oom_call_count{0};
 
 // HCCL ReduceOp mapping
