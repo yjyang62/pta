@@ -224,6 +224,37 @@ else()
   message(FATAL_ERROR "Cannot find installed Python head file directory")
 endif()
 
+if(DEFINED PYTHON_EXECUTABLE)
+  set(TORCHNPU_PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})
+else()
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  set(TORCHNPU_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
+endif()
+
+if(NOT DEFINED TORCH_VERSION)
+  execute_process(
+    COMMAND ${TORCHNPU_PYTHON_EXECUTABLE} -c "import torch; print(torch.__version__.split('+')[0])"
+    RESULT_VARIABLE _TORCH_VERSION_RESULT
+    OUTPUT_VARIABLE TORCH_VERSION
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT _TORCH_VERSION_RESULT EQUAL 0)
+    message(FATAL_ERROR "Cannot determine TORCH_VERSION for ATen binding generation")
+  endif()
+  add_definitions(-DPYTORCH_NPU_VERSION="${TORCH_VERSION}")
+endif()
+
+set(TORCHNPU_NATIVE_FUNCTIONS_HEADER
+  ${PROJECT_SOURCE_DIR}/torch_npu/csrc/aten/NPUNativeFunctions.h)
+if(NOT EXISTS ${TORCHNPU_NATIVE_FUNCTIONS_HEADER})
+  execute_process(
+    COMMAND bash ${PROJECT_SOURCE_DIR}/generate_code.sh ${TORCHNPU_PYTHON_EXECUTABLE} ${TORCH_VERSION}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    RESULT_VARIABLE _GENERATE_CODE_RESULT)
+  if(NOT _GENERATE_CODE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate ATen bindings for torch_npu")
+  endif()
+endif()
+
 # sources
 set(ATEN_SRCS)
 set(CORE_SRCS)
