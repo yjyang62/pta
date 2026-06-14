@@ -169,7 +169,7 @@ int64_t getPtaOomTargetRank()
         if (env_val != nullptr) {
             return strtol(env_val, nullptr, 10);
         }
-        return std::getenv("RANK") != nullptr ? 0 : -1;
+        return -1;
     }();
     return target_rank;
 }
