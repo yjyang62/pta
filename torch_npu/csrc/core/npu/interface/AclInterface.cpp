@@ -1088,7 +1088,7 @@ aclError AclmdlRIExecuteAsync(aclmdlRI modelRI, aclrtStream stream)
 {
     ACL_CALL_LOG("aclmdlRIExecuteAsync", "modelRI=" << modelRI << ", stream=" << stream);
     if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::recordPtaOomProgress();
+        c10_npu::maybeThrowPtaOomOnForwardBoundary("AclmdlRIExecuteAsync");
     }
     typedef aclError (*AclmdlRIExecuteAsync)(aclmdlRI, aclrtStream);
     static AclmdlRIExecuteAsync func = nullptr;
@@ -1588,6 +1588,10 @@ aclError AclrtMemcpyAsyncWithCondition(void *dst, size_t destMax, const void *sr
         func = (AclrtMemcpyAsyncWithConditionFunc)GET_FUNC(aclrtMemcpyAsyncWithCondition);
     }
     TORCH_CHECK(func, "Failed to find function ", "aclrtMemcpyAsyncWithCondition", PROF_ERROR(ErrCode::NOT_FOUND));
+    if (kind == aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST &&
+        c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
+        c10_npu::maybeThrowPtaOomOnForwardBoundary("AclrtMemcpyAsyncWithCondition");
+    }
     return func(dst, destMax, src, count, kind, stream);
 }
 

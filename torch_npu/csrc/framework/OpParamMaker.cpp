@@ -276,7 +276,7 @@ aclError OpCommandImpl::InnerRun(
 aclError OpCommandImpl::InnerRunOpApi(const string &op_name, PROC_FUNC func)
 {
     if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::recordPtaOomProgress();
+        c10_npu::recordPtaOomProgress("InnerRunOpApi");
     }
 
     aclError ret;
@@ -339,7 +339,7 @@ int ExecFunc(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<ExecuteParas *>(in->paramVal);
     if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::recordPtaOomProgress();
+        c10_npu::recordPtaOomProgress("ExecFunc");
     }
     ASCEND_LOGD("Op %s Run.", cur_paras->opType);
     logger->debug("ExecFunc: Op %s Run.", cur_paras->opType);
@@ -436,7 +436,7 @@ int ExecFuncOpApi(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<ExecuteParasOpApi *>(in->paramVal);
     if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::recordPtaOomProgress();
+        c10_npu::recordPtaOomProgress("ExecFuncOpApi");
     }
     ASCEND_LOGD("Op %s Run.", cur_paras->opType);
     logger->debug("ExecFuncOpApi: Op %s Run.", cur_paras->opType);

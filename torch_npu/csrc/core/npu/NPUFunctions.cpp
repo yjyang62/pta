@@ -6,6 +6,7 @@
 #include "torch_npu/csrc/core/npu/NPUAffinityController.h"
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 #include "torch_npu/csrc/core/npu/GetCANNInfo.h"
+#include "torch_npu/csrc/core/npu/interface/AclInterface.h"
 #include "third_party/acl/inc/acl/acl_rt.h"
 #ifndef BUILD_LIBTORCH
 #include "torch_npu/csrc/sanitizer/NPUTrace.h"
@@ -363,7 +364,7 @@ void stream_synchronize(aclrtStream stream)
         trigger->traceNpuStreamSynchronization(reinterpret_cast<uintptr_t>(stream));
     }
 #endif
-    NPU_CHECK_ERROR(aclrtSynchronizeStream(stream));
+    NPU_CHECK_ERROR(c10_npu::acl::AclrtSynchronizeStreamWithTimeout(stream));
 }
 
 aclError SetDeviceResLimit(int32_t device, int32_t type, uint32_t value)
