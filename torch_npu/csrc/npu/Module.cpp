@@ -864,6 +864,7 @@ PyObject* THNPModule_restart_device_wrap(PyObject* self, PyObject* arg)
     }
     setDefaultStreamsStatus(device, c10_npu::RepoStatus::INIT);
     c10_npu::NPUCachingAllocator::cleanEvent();
+    c10_npu::resetPtaOomInjectState();
     loggerRecovery->info("NPU restart device end, device is %d.", device);
 
     Py_RETURN_NONE;

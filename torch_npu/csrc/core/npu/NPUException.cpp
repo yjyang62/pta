@@ -2,7 +2,9 @@
 #include <cstdlib>
 
 #include "torch_npu/csrc/core/npu/NPUException.h"
+#include "torch_npu/csrc/core/npu/NPUCachingAllocator.h"
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
+#include "torch_npu/csrc/core/npu/NPURecovery.h"
 #include "torch_npu/csrc/core/npu/NPUStream.h"
 #include "torch_npu/csrc/core/npu/NpuVariables.h"
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
@@ -438,6 +440,7 @@ bool isCannOOM(const std::string &errMsg)
 
 namespace {
 static std::atomic<int64_t> g_pta_oom_call_count{0};
+static std::atomic<bool> g_pta_oom_injected{false};
 static constexpr int64_t kDefaultPtaOomTriggerCount = 6000;
 
 int64_t getPtaOomTriggerCount()
@@ -450,7 +453,7 @@ int64_t getPtaOomTriggerCount()
 }
 } // namespace
 
-void maybeThrowPtaOom(const char *context)
+void maybeThrowPtaOom(const char *context, int device)
 {
     const int64_t trigger_count = getPtaOomTriggerCount();
     if (trigger_count <= 0) {
@@ -458,17 +461,39 @@ void maybeThrowPtaOom(const char *context)
     }
 
     const int64_t current_count = ++g_pta_oom_call_count;
-    if (current_count > trigger_count && current_count < trigger_count + 2) {
-        auto retmsg = std::string("NPU out of memory. Injected PTA OOM after ") +
-            std::to_string(current_count) + " PTA operations";
-        if (context != nullptr && context[0] != '\0') {
-            retmsg += ", context is ";
-            retmsg += context;
-        }
-        retmsg += ". ";
-        retmsg += PTA_ERROR(ErrCode::MEMORY);
-        TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+    if (current_count <= trigger_count || current_count >= trigger_count + 2) {
+        return;
     }
+
+    if (g_pta_oom_injected.exchange(true)) {
+        return;
+    }
+
+    if (device < 0) {
+        NPU_CHECK_ERROR(c10_npu::GetDevice(&device));
+    }
+
+    NPUCachingAllocator::markAllBlockUnsafe(device);
+    c10_npu::set_npu_data_unsafe_flag(true);
+
+    auto retmsg = std::string("NPU out of memory. Injected full-card PTA OOM on NPU ") +
+        std::to_string(device) +
+        ". All existing tensors on this device are marked unsafe. "
+        "Triggered after " + std::to_string(current_count) + " PTA operations";
+    if (context != nullptr && context[0] != '\0') {
+        retmsg += ", context is ";
+        retmsg += context;
+    }
+    retmsg += ". Recover with: torch_npu.npu.restart_device(" +
+        std::to_string(device) + ", rebuild_all_resources=True). ";
+    retmsg += PTA_ERROR(ErrCode::MEMORY);
+    TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+}
+
+void resetPtaOomInjectState()
+{
+    g_pta_oom_injected.store(false);
+    g_pta_oom_call_count.store(0);
 }
 
 } // namespace c10_npu

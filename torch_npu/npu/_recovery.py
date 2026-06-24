@@ -62,6 +62,8 @@ def restart_device(device_id: int, rebuild_all_resources: int = False):
         _recovery_all_npu_stream(device_id)
     torch_npu._C._npu_restart_device(device_id)
     _except_handler.set_force_stop_exception(False)
+    if rebuild_all_resources:
+        set_npu_tensor_unsafe_check_flag(False)
     # pg recovery
     npu_device = torch.device('npu')
     for pg in _pg_map:

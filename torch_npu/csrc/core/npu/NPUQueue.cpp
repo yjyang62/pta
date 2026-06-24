@@ -350,7 +350,7 @@ NPUStatus Repository::MakeSureQueueEmpty(bool check_error)
         }
     }
     if (check_error && currentStreamCaptureStatus() == CaptureStatus::None) {
-        maybeThrowPtaOom("MakeSureQueueEmpty");
+        maybeThrowPtaOom("MakeSureQueueEmpty", device_idx);
     }
     logger->debug("MakeSureQueueEmpty: clearing successful, device = %d, write_idx = %u, read_idx = %u, status = %d",
         device_idx, write_idx.idx, read_idx.idx, GetStatus());

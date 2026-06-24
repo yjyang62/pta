@@ -336,7 +336,9 @@ std::string handleSuspectRemoteError(int errorCode);
 
 bool isCannOOM(const std::string &errMsg);
 
-void maybeThrowPtaOom(const char *context = nullptr);
+void maybeThrowPtaOom(const char *context = nullptr, int device = -1);
+
+void resetPtaOomInjectState();
 
 bool ShouldAppendDeviceErrorVerbose();
 

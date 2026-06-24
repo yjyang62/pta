@@ -1153,7 +1153,7 @@ public:
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
     {
         if (currentStreamCaptureStatus() == CaptureStatus::None) {
-            maybeThrowPtaOom("malloc");
+            maybeThrowPtaOom("malloc", device);
         }
 
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
