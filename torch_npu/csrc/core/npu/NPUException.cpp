@@ -484,16 +484,9 @@ void maybeThrowPtaOom(const char *context, int device)
         retmsg += ", context is ";
         retmsg += context;
     }
-    retmsg += ". Recover with: torch_npu.npu.restart_device(" +
-        std::to_string(device) + ", rebuild_all_resources=True). ";
+    retmsg += ". ";
     retmsg += PTA_ERROR(ErrCode::MEMORY);
     TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
-}
-
-void resetPtaOomInjectState()
-{
-    g_pta_oom_injected.store(false);
-    g_pta_oom_call_count.store(0);
 }
 
 } // namespace c10_npu

@@ -338,8 +338,6 @@ bool isCannOOM(const std::string &errMsg);
 
 void maybeThrowPtaOom(const char *context = nullptr, int device = -1);
 
-void resetPtaOomInjectState();
-
 bool ShouldAppendDeviceErrorVerbose();
 
 void clear_device_error_info();
