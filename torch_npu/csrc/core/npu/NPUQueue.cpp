@@ -8,6 +8,7 @@
 #include "torch_npu/csrc/framework/OpCommand.h"
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 #include "torch_npu/csrc/core/npu/NPUEventManager.h"
+#include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
 #include "torch_npu/csrc/logging/LogContext.h"
 
 #ifndef BUILD_LIBTORCH
@@ -347,6 +348,9 @@ NPUStatus Repository::MakeSureQueueEmpty(bool check_error)
         } else {
             throw std::runtime_error(runtime_error);
         }
+    }
+    if (check_error && currentStreamCaptureStatus() == CaptureStatus::None) {
+        maybeThrowPtaOom("MakeSureQueueEmpty");
     }
     logger->debug("MakeSureQueueEmpty: clearing successful, device = %d, write_idx = %u, read_idx = %u, status = %d",
         device_idx, write_idx.idx, read_idx.idx, GetStatus());

@@ -100,7 +100,6 @@ __all__ = [
     "current_blas_handle",
     "stop_device",
     "restart_device",
-    "inject_oom",
     "check_uce_in_memory",
     "config",
     "matmul",
@@ -160,7 +159,7 @@ from .utils import (obfuscation_initialize, obfuscation_calculate, obfuscation_f
                     get_sync_debug_mode, init_dump, current_blas_handle, is_bf16_supported,
                     finalize_dump, set_dump, get_npu_overflow_flag, clear_npu_overflow_flag,
                     check_uce_in_memory, stress_detect, _get_uce_addr, ipc_collect, set_op_timeout_ms)
-from ._recovery import restart_device, stop_device, inject_oom
+from ._recovery import restart_device, stop_device
 from .streams import Stream, Event, SyncLaunchStream, ExternalEvent
 from .mstx import mstx
 from .npu_config import *  # noqa: F403

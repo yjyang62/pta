@@ -1,3 +1,6 @@
+#include <atomic>
+#include <cstdlib>
+
 #include "torch_npu/csrc/core/npu/NPUException.h"
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
 #include "torch_npu/csrc/core/npu/NPUStream.h"
@@ -431,6 +434,41 @@ bool isCannOOM(const std::string &errMsg)
         return true;
     }
     return false;
+}
+
+namespace {
+static std::atomic<int64_t> g_pta_oom_call_count{0};
+static constexpr int64_t kDefaultPtaOomTriggerCount = 6000;
+
+int64_t getPtaOomTriggerCount()
+{
+    const static int64_t trigger_count = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_TRIGGER_COUNT");
+        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultPtaOomTriggerCount;
+    }();
+    return trigger_count;
+}
+} // namespace
+
+void maybeThrowPtaOom(const char *context)
+{
+    const int64_t trigger_count = getPtaOomTriggerCount();
+    if (trigger_count <= 0) {
+        return;
+    }
+
+    const int64_t current_count = ++g_pta_oom_call_count;
+    if (current_count > trigger_count && current_count < trigger_count + 2) {
+        auto retmsg = std::string("NPU out of memory. Injected PTA OOM after ") +
+            std::to_string(current_count) + " PTA operations";
+        if (context != nullptr && context[0] != '\0') {
+            retmsg += ", context is ";
+            retmsg += context;
+        }
+        retmsg += ". ";
+        retmsg += PTA_ERROR(ErrCode::MEMORY);
+        TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+    }
 }
 
 } // namespace c10_npu
