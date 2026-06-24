@@ -3,6 +3,8 @@
 
 #include "torch_npu/csrc/core/npu/CachingHostAllocator.h"
 #include "torch_npu/csrc/core/npu/NPUEventManager.h"
+#include "torch_npu/csrc/core/npu/NPUException.h"
+#include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
 #include "torch_npu/csrc/core/npu/NPUQueue.h"
 #include "torch_npu/csrc/core/npu/interface/AsyncTaskQueueInterface.h"
 #include "torch_npu/csrc/distributed/HCCLUtils.hpp"
@@ -273,6 +275,8 @@ aclError OpCommandImpl::InnerRun(
 
 aclError OpCommandImpl::InnerRunOpApi(const string &op_name, PROC_FUNC func)
 {
+    c10_npu::maybeThrowPtaOom("InnerRunOpApi");
+
     aclError ret;
     auto stream = c10_npu::getCurrentNPUStream();
     if (stream.getRepoStopFlag()) {
@@ -332,6 +336,7 @@ bool ContainsAny(const std::string& str, std::initializer_list<std::string> patt
 int ExecFunc(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<ExecuteParas *>(in->paramVal);
+    c10_npu::maybeThrowPtaOom("ExecFunc");
     ASCEND_LOGD("Op %s Run.", cur_paras->opType);
     logger->debug("ExecFunc: Op %s Run.", cur_paras->opType);
     aclError ret;
@@ -426,6 +431,7 @@ int ExecFunc(c10_npu::queue::QueueParas *in, aclrtStream stream)
 int ExecFuncOpApi(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<ExecuteParasOpApi *>(in->paramVal);
+    c10_npu::maybeThrowPtaOom("ExecFuncOpApi");
     ASCEND_LOGD("Op %s Run.", cur_paras->opType);
     logger->debug("ExecFuncOpApi: Op %s Run.", cur_paras->opType);
     aclError ret;
@@ -468,6 +474,7 @@ int ExecFuncOpApi(c10_npu::queue::QueueParas *in, aclrtStream stream)
 int MemcopyAsyncFunc(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<c10_npu::queue::CopyParas *>(in->paramVal);
+    c10_npu::maybeThrowPtaOom("MemcopyAsyncFunc");
     logger->debug("MemcopyAsyncFunc Run.");
     aclError ret;
     bool flag;

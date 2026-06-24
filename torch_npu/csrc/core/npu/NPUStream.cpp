@@ -14,6 +14,7 @@
 #include "torch_npu/csrc/core/npu/NPUGuard.h"
 #include "torch_npu/csrc/core/npu/NPUQueue.h"
 #include "torch_npu/csrc/core/npu/NPUException.h"
+#include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 #include "torch_npu/csrc/core/npu/sys_ctrl/npu_sys_ctrl.h"
 #include "torch_npu/csrc/core/npu/interface/AsyncTaskQueueInterface.h"
@@ -508,6 +509,10 @@ NPUStatus emptyAllNPUStream(bool check_error)
         }
     }
 
+    if (check_error) {
+        maybeThrowPtaOom("emptyAllNPUStream");
+    }
+
     return NPU_STATUS_SUCCESS;
 }
 
@@ -558,6 +563,9 @@ bool npuSynchronizeDevice(bool check_error)
         if (ret != NPU_STATUS_SUCCESS) {
             ASCEND_LOGE("MakeSureQueueEmpty fail, ret: %s", ret.c_str());
         }
+    }
+    if (check_error) {
+        maybeThrowPtaOom("npuSynchronizeDevice");
     }
     auto acl_ret = c10_npu::acl::AclrtSynchronizeDeviceWithTimeout();
     if (acl_ret != ACL_ERROR_NONE) {

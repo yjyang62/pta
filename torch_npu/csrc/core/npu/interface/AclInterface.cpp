@@ -8,6 +8,7 @@
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 #include "torch_npu/csrc/core/npu/NPUException.h"
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
+#include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
 #include "torch_npu/csrc/core/npu/GetCANNInfo.h"
 #ifndef BUILD_LIBTORCH
 #include "torch_npu/csrc/sanitizer/NPUTrace.h"
@@ -594,8 +595,9 @@ aclError AclrtSynchronizeStreamWithTimeout(aclrtStream stream) {
     typedef aclError (*AclrtSynchronizeStreamWithTimeout)(aclrtStream, int32_t);
     static AclrtSynchronizeStreamWithTimeout func = (AclrtSynchronizeStreamWithTimeout)GET_FUNC(aclrtSynchronizeStreamWithTimeout);
     int32_t timeout = c10_npu::option::OptionsManager::GetACLExecTimeout();
+    aclError ret = ACL_ERROR_NONE;
     if (func != nullptr) {
-        return func(stream, timeout);
+        ret = func(stream, timeout);
     } else {
         TORCH_NPU_WARN_ONCE(func, "Failed to find function", "aclrtSynchronizeStreamWithTimeout");
         typedef aclError (*AclrtSynchronizeStream)(aclrtStream);
@@ -604,8 +606,10 @@ aclError AclrtSynchronizeStreamWithTimeout(aclrtStream stream) {
             func_backup = (AclrtSynchronizeStream)GET_FUNC(aclrtSynchronizeStream);
         }
         TORCH_CHECK(func_backup, "Failed to find function", "aclrtSynchronizeStreamWithTimeout and aclrtSynchronizeStream", PROF_ERROR(ErrCode::NOT_FOUND));
-        return func_backup(stream);
+        ret = func_backup(stream);
     }
+    c10_npu::maybeThrowPtaOom("AclrtSynchronizeStreamWithTimeout");
+    return ret;
 }
 
 aclError AclrtDestroyStreamForce(aclrtStream stream) {
@@ -992,8 +996,9 @@ aclError AclrtSynchronizeDeviceWithTimeout(void)
     typedef aclError (*AclrtSynchronizeDeviceWithTimeout)(int32_t);
     static AclrtSynchronizeDeviceWithTimeout func = (AclrtSynchronizeDeviceWithTimeout)GET_FUNC(aclrtSynchronizeDeviceWithTimeout);
     int32_t timeout = c10_npu::option::OptionsManager::GetACLDeviceSyncTimeout();
+    aclError ret = ACL_ERROR_NONE;
     if (func != nullptr) {
-        return func(timeout);
+        ret = func(timeout);
     } else {
         if (timeout > 0) {
             TORCH_NPU_WARN_ONCE("The ACL_DEVICE_SYNC_TIMEOUT does not take effect. If you want to enable this env, please upgrade CANN to the matching version.");
@@ -1004,8 +1009,10 @@ aclError AclrtSynchronizeDeviceWithTimeout(void)
             func_backup = (AclrtSynchronizeDevice)GET_FUNC(aclrtSynchronizeDevice);
         }
         TORCH_CHECK(func_backup, "Failed to find function ", "aclrtSynchronizeDeviceWithTimeout and aclrtSynchronizeDevice", PTA_ERROR(ErrCode::NOT_FOUND));
-        return func_backup();
+        ret = func_backup();
     }
+    c10_npu::maybeThrowPtaOom("AclrtSynchronizeDeviceWithTimeout");
+    return ret;
 }
 
 aclError AclrtEventGetTimestamp(aclrtEvent event, uint64_t *timestamp)
@@ -1076,6 +1083,7 @@ aclError AclmdlRIDebugPrint(aclmdlRI modelRI)
 aclError AclmdlRIExecuteAsync(aclmdlRI modelRI, aclrtStream stream)
 {
     ACL_CALL_LOG("aclmdlRIExecuteAsync", "modelRI=" << modelRI << ", stream=" << stream);
+    c10_npu::maybeThrowPtaOom("AclmdlRIExecuteAsync");
     typedef aclError (*AclmdlRIExecuteAsync)(aclmdlRI, aclrtStream);
     static AclmdlRIExecuteAsync func = nullptr;
     if (func == nullptr) {
@@ -1574,6 +1582,9 @@ aclError AclrtMemcpyAsyncWithCondition(void *dst, size_t destMax, const void *sr
         func = (AclrtMemcpyAsyncWithConditionFunc)GET_FUNC(aclrtMemcpyAsyncWithCondition);
     }
     TORCH_CHECK(func, "Failed to find function ", "aclrtMemcpyAsyncWithCondition", PROF_ERROR(ErrCode::NOT_FOUND));
+    if (kind == aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST) {
+        c10_npu::maybeThrowPtaOom("AclrtMemcpyAsyncWithCondition");
+    }
     return func(dst, destMax, src, count, kind, stream);
 }
 

@@ -1,6 +1,12 @@
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
+
 #include "torch_npu/csrc/core/npu/NPUException.h"
+#include "torch_npu/csrc/core/npu/NPUCachingAllocator.h"
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
-#include "torch_npu/csrc/core/npu/NPUStream.h"
+#include "torch_npu/csrc/core/npu/NPURecovery.h"
 #include "torch_npu/csrc/core/npu/NpuVariables.h"
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 
@@ -431,6 +437,135 @@ bool isCannOOM(const std::string &errMsg)
         return true;
     }
     return false;
+}
+
+namespace {
+static std::atomic<bool> g_pta_oom_injected{false};
+static std::atomic<bool> g_pta_oom_timer_started{false};
+static std::atomic<bool> g_pta_oom_timer_expired{false};
+static std::chrono::steady_clock::time_point g_pta_oom_start_time;
+static constexpr int64_t kDefaultTriggerAfterSeconds = 360;
+
+bool isPtaOomDebugEnabled()
+{
+    const static bool enabled = []() -> bool {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_DEBUG");
+        return (env_val != nullptr) && (strtol(env_val, nullptr, 10) != 0);
+    }();
+    return enabled;
+}
+
+int64_t getTriggerAfterSeconds()
+{
+    const static int64_t trigger_seconds = []() -> int64_t {
+        char *seconds_val = c10_npu::option::get_and_log_env("PTA_OOM_TRIGGER_AFTER_SECONDS");
+        if (seconds_val != nullptr) {
+            return strtol(seconds_val, nullptr, 10);
+        }
+        char *minutes_val = c10_npu::option::get_and_log_env("PTA_OOM_TRIGGER_AFTER_MINUTES");
+        if (minutes_val != nullptr) {
+            return strtol(minutes_val, nullptr, 10) * 60;
+        }
+        char *timer_mode = c10_npu::option::get_and_log_env("PTA_OOM_TIMER");
+        if (timer_mode != nullptr && strtol(timer_mode, nullptr, 10) != 0) {
+            return kDefaultTriggerAfterSeconds;
+        }
+        return 0;
+    }();
+    return trigger_seconds;
+}
+
+void throwFullCardPtaOom(const char *context, int device);
+
+void ensurePtaOomTimerStarted()
+{
+    if (g_pta_oom_timer_started.load()) {
+        return;
+    }
+    const int64_t trigger_seconds = getTriggerAfterSeconds();
+    if (trigger_seconds <= 0) {
+        return;
+    }
+    bool expected = false;
+    if (!g_pta_oom_timer_started.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    g_pta_oom_start_time = std::chrono::steady_clock::now();
+    ASCEND_LOGI("PTA OOM timer started, will trigger after %lld seconds",
+        static_cast<long long>(trigger_seconds));
+    std::thread([trigger_seconds]() {
+        std::this_thread::sleep_for(std::chrono::seconds(trigger_seconds));
+        if (!g_pta_oom_injected.load()) {
+            g_pta_oom_timer_expired.store(true);
+            ASCEND_LOGI("PTA OOM timer expired after %lld seconds, pending throw on next hook",
+                static_cast<long long>(trigger_seconds));
+        }
+    }).detach();
+}
+
+int64_t getElapsedSecondsSincePtaOomStart()
+{
+    const auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::seconds>(now - g_pta_oom_start_time).count();
+}
+
+const bool kPtaOomTimerArmed = []() {
+    if (getTriggerAfterSeconds() > 0) {
+        ensurePtaOomTimerStarted();
+    }
+    return true;
+}();
+
+void throwFullCardPtaOom(const char *context, int device)
+{
+    if (g_pta_oom_injected.exchange(true)) {
+        return;
+    }
+
+    if (device < 0) {
+        NPU_CHECK_ERROR(c10_npu::GetDevice(&device));
+    }
+
+    NPUCachingAllocator::markAllBlockUnsafe(device);
+    c10_npu::set_npu_data_unsafe_flag(true);
+
+    const int64_t trigger_seconds = getTriggerAfterSeconds();
+    auto retmsg = std::string("NPU out of memory. Injected full-card PTA OOM on NPU ") +
+        std::to_string(device) +
+        ". All existing tensors on this device are marked unsafe. "
+        "Triggered after " + std::to_string(trigger_seconds) + " seconds";
+    if (context != nullptr && context[0] != '\0') {
+        retmsg += ", context is ";
+        retmsg += context;
+    }
+    retmsg += ". ";
+    retmsg += PTA_ERROR(ErrCode::MEMORY);
+    TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+}
+} // namespace
+
+void maybeThrowPtaOom(const char *context, int device)
+{
+    const int64_t trigger_seconds = getTriggerAfterSeconds();
+    if (trigger_seconds <= 0 || g_pta_oom_injected.load()) {
+        return;
+    }
+    ensurePtaOomTimerStarted();
+    const bool expired = g_pta_oom_timer_expired.load() ||
+        (g_pta_oom_timer_started.load() && getElapsedSecondsSincePtaOomStart() >= trigger_seconds);
+    if (!expired) {
+        if (isPtaOomDebugEnabled()) {
+            const int64_t elapsed = getElapsedSecondsSincePtaOomStart();
+            if (elapsed > 0 && elapsed % 60 == 0) {
+                ASCEND_LOGI("PTA OOM timer: elapsed=%lld/%lld seconds context=%s",
+                    static_cast<long long>(elapsed),
+                    static_cast<long long>(trigger_seconds),
+                    context != nullptr ? context : "");
+            }
+        }
+        return;
+    }
+    throwFullCardPtaOom(context, device);
 }
 
 } // namespace c10_npu

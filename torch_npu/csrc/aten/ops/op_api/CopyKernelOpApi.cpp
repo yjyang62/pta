@@ -23,6 +23,7 @@
 #include "torch_npu/csrc/core/npu/CachingHostAllocator.h"
 #include "torch_npu/csrc/aten/NPUOpApiNativeFunctions.h"
 #include "torch_npu/csrc/aten/NPUNativeFunctions.h"
+#include "torch_npu/csrc/core/npu/interface/AclInterface.h"
 #include "third_party/op-plugin/op_plugin/utils/op_api_common.h"
 #ifndef BUILD_LIBTORCH
 #include "torch_npu/csrc/sanitizer/NPUTrace.h"
@@ -49,7 +50,7 @@ void copy_between_host_and_device_opapi(at::Tensor& dst, const at::Tensor& src, 
         void* currentPtr = torch_npu::utils::is_npu(dst) ? src.data_ptr() : dst.data_ptr();
         process_non_blocking_copy(storage, currentPtr, stream, kind);
     } else {
-        aclError error = aclrtSynchronizeStream(stream);
+        aclError error = c10_npu::acl::AclrtSynchronizeStreamWithTimeout(stream);
         auto ret = CalcuOpUtil::AclrtMemcpyWithModeSwitch(
             std::make_pair(dst.storage().unsafeGetStorageImpl(), dst.storage_offset() * dst.itemsize()), nbytes,
             std::make_pair(src.storage().unsafeGetStorageImpl(), src.storage_offset() * src.itemsize()), nbytes, kind);

@@ -2,6 +2,7 @@
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
 #include "torch_npu/csrc/core/npu/NPUGuard.h"
 #include "torch_npu/csrc/core/npu/NPUException.h"
+#include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
 #include "torch_npu/csrc/core/npu/NPUEventManager.h"
 #include "torch_npu/csrc/core/npu/sys_ctrl/npu_sys_ctrl.h"
 #include "torch_npu/csrc/core/npu/interface/AsyncTaskQueueInterface.h"
@@ -202,6 +203,7 @@ void NPUEvent::synchronize() const
         }
         NPU_CHECK_ERROR(aclrtSynchronizeEvent(event_));
         ASCEND_LOGI("Event: aclrtSynchronizeEvent is successfully executed, event=%p", event_);
+        maybeThrowPtaOom("NPUEvent::synchronize");
 #ifndef BUILD_LIBTORCH
         const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
         if (C10_UNLIKELY(trigger)) {
