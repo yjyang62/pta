@@ -441,6 +441,8 @@ bool isCannOOM(const std::string &errMsg)
 namespace {
 static std::atomic<int64_t> g_pta_oom_call_count{0};
 static std::atomic<bool> g_pta_oom_injected{false};
+static std::atomic<bool> g_pta_oom_pending{false};
+static std::atomic<int64_t> g_pta_oom_pending_count{0};
 static constexpr int64_t kDefaultPtaOomTriggerCount = 400000;
 
 int64_t getPtaOomTriggerCount()
@@ -451,20 +453,9 @@ int64_t getPtaOomTriggerCount()
     }();
     return trigger_count;
 }
-} // namespace
 
-void maybeThrowPtaOom(const char *context, int device)
+void throwFullCardPtaOom(const char *context, int device)
 {
-    const int64_t trigger_count = getPtaOomTriggerCount();
-    if (trigger_count <= 0) {
-        return;
-    }
-
-    const int64_t current_count = ++g_pta_oom_call_count;
-    if (current_count <= trigger_count || current_count >= trigger_count + 2) {
-        return;
-    }
-
     if (g_pta_oom_injected.exchange(true)) {
         return;
     }
@@ -476,6 +467,7 @@ void maybeThrowPtaOom(const char *context, int device)
     NPUCachingAllocator::markAllBlockUnsafe(device);
     c10_npu::set_npu_data_unsafe_flag(true);
 
+    const int64_t current_count = g_pta_oom_pending_count.load();
     auto retmsg = std::string("NPU out of memory. Injected full-card PTA OOM on NPU ") +
         std::to_string(device) +
         ". All existing tensors on this device are marked unsafe. "
@@ -487,6 +479,41 @@ void maybeThrowPtaOom(const char *context, int device)
     retmsg += ". ";
     retmsg += PTA_ERROR(ErrCode::MEMORY);
     TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+}
+} // namespace
+
+void recordPtaOomProgress()
+{
+    const int64_t trigger_count = getPtaOomTriggerCount();
+    if (trigger_count <= 0 || g_pta_oom_injected.load()) {
+        return;
+    }
+
+    const int64_t current_count = ++g_pta_oom_call_count;
+    if (current_count > trigger_count && current_count < trigger_count + 2) {
+        g_pta_oom_pending_count.store(current_count);
+        g_pta_oom_pending.store(true);
+    }
+}
+
+void maybeThrowPtaOom(const char *context, int device)
+{
+    const int64_t trigger_count = getPtaOomTriggerCount();
+    if (trigger_count <= 0) {
+        return;
+    }
+
+    if (g_pta_oom_pending.load() && !g_pta_oom_injected.load()) {
+        g_pta_oom_pending.store(false);
+        throwFullCardPtaOom(context, device);
+        return;
+    }
+
+    recordPtaOomProgress();
+    if (g_pta_oom_pending.load() && !g_pta_oom_injected.load()) {
+        g_pta_oom_pending.store(false);
+        throwFullCardPtaOom(context, device);
+    }
 }
 
 } // namespace c10_npu

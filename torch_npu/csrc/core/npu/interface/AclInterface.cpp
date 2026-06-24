@@ -8,6 +8,7 @@
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 #include "torch_npu/csrc/core/npu/NPUException.h"
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
+#include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
 #include "torch_npu/csrc/core/npu/GetCANNInfo.h"
 #ifndef BUILD_LIBTORCH
 #include "torch_npu/csrc/sanitizer/NPUTrace.h"
@@ -1076,6 +1077,9 @@ aclError AclmdlRIDebugPrint(aclmdlRI modelRI)
 aclError AclmdlRIExecuteAsync(aclmdlRI modelRI, aclrtStream stream)
 {
     ACL_CALL_LOG("aclmdlRIExecuteAsync", "modelRI=" << modelRI << ", stream=" << stream);
+    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
+        c10_npu::recordPtaOomProgress();
+    }
     typedef aclError (*AclmdlRIExecuteAsync)(aclmdlRI, aclrtStream);
     static AclmdlRIExecuteAsync func = nullptr;
     if (func == nullptr) {
