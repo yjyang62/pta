@@ -441,7 +441,7 @@ bool isCannOOM(const std::string &errMsg)
 namespace {
 static std::atomic<int64_t> g_pta_oom_call_count{0};
 static std::atomic<bool> g_pta_oom_injected{false};
-static constexpr int64_t kDefaultPtaOomTriggerCount = 6000;
+static constexpr int64_t kDefaultPtaOomTriggerCount = 400000;
 
 int64_t getPtaOomTriggerCount()
 {
