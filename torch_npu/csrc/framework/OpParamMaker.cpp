@@ -275,9 +275,7 @@ aclError OpCommandImpl::InnerRun(
 
 aclError OpCommandImpl::InnerRunOpApi(const string &op_name, PROC_FUNC func)
 {
-    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::recordPtaOomProgress("InnerRunOpApi");
-    }
+    c10_npu::maybeThrowPtaOom("InnerRunOpApi");
 
     aclError ret;
     auto stream = c10_npu::getCurrentNPUStream();
@@ -338,9 +336,7 @@ bool ContainsAny(const std::string& str, std::initializer_list<std::string> patt
 int ExecFunc(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<ExecuteParas *>(in->paramVal);
-    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::recordPtaOomProgress("ExecFunc");
-    }
+    c10_npu::maybeThrowPtaOom("ExecFunc");
     ASCEND_LOGD("Op %s Run.", cur_paras->opType);
     logger->debug("ExecFunc: Op %s Run.", cur_paras->opType);
     aclError ret;
@@ -435,9 +431,7 @@ int ExecFunc(c10_npu::queue::QueueParas *in, aclrtStream stream)
 int ExecFuncOpApi(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<ExecuteParasOpApi *>(in->paramVal);
-    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::recordPtaOomProgress("ExecFuncOpApi");
-    }
+    c10_npu::maybeThrowPtaOom("ExecFuncOpApi");
     ASCEND_LOGD("Op %s Run.", cur_paras->opType);
     logger->debug("ExecFuncOpApi: Op %s Run.", cur_paras->opType);
     aclError ret;
@@ -480,9 +474,7 @@ int ExecFuncOpApi(c10_npu::queue::QueueParas *in, aclrtStream stream)
 int MemcopyAsyncFunc(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<c10_npu::queue::CopyParas *>(in->paramVal);
-    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::maybeThrowPtaOomOnForwardBoundary("MemcopyAsyncFunc");
-    }
+    c10_npu::maybeThrowPtaOom("MemcopyAsyncFunc");
     logger->debug("MemcopyAsyncFunc Run.");
     aclError ret;
     bool flag;

@@ -203,9 +203,7 @@ void NPUEvent::synchronize() const
         }
         NPU_CHECK_ERROR(aclrtSynchronizeEvent(event_));
         ASCEND_LOGI("Event: aclrtSynchronizeEvent is successfully executed, event=%p", event_);
-        if (currentStreamCaptureStatus() == CaptureStatus::None) {
-            maybeThrowPtaOomOnForwardBoundary("NPUEvent::synchronize");
-        }
+        maybeThrowPtaOom("NPUEvent::synchronize");
 #ifndef BUILD_LIBTORCH
         const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
         if (C10_UNLIKELY(trigger)) {

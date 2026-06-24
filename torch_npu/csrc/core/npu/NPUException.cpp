@@ -7,7 +7,6 @@
 #include "torch_npu/csrc/core/npu/NPUCachingAllocator.h"
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
 #include "torch_npu/csrc/core/npu/NPURecovery.h"
-#include "torch_npu/csrc/core/npu/NPUStream.h"
 #include "torch_npu/csrc/core/npu/NpuVariables.h"
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 
@@ -441,58 +440,16 @@ bool isCannOOM(const std::string &errMsg)
 }
 
 namespace {
-static std::atomic<int64_t> g_pta_oom_call_count{0};
-static std::atomic<int64_t> g_pta_forward_boundary_count{0};
 static std::atomic<bool> g_pta_oom_injected{false};
-static std::atomic<bool> g_pta_oom_pending{false};
-static std::atomic<int64_t> g_pta_oom_pending_count{0};
 static std::atomic<bool> g_pta_oom_timer_started{false};
 static std::atomic<bool> g_pta_oom_timer_expired{false};
 static std::chrono::steady_clock::time_point g_pta_oom_start_time;
-static constexpr int64_t kDefaultPtaOomTriggerCount = 400000;
-static constexpr int64_t kDefaultForwardSyncTriggerCount = 10;
 static constexpr int64_t kDefaultTriggerAfterSeconds = 360;
 
 bool isPtaOomDebugEnabled()
 {
     const static bool enabled = []() -> bool {
         char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_DEBUG");
-        return (env_val != nullptr) && (strtol(env_val, nullptr, 10) != 0);
-    }();
-    return enabled;
-}
-
-int64_t getWarmupSkipCount()
-{
-    const static int64_t skip_count = []() -> int64_t {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_SKIP_WARMUP_COUNT");
-        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : 0;
-    }();
-    return skip_count;
-}
-
-int64_t getPtaOomTriggerCount()
-{
-    const static int64_t trigger_count = []() -> int64_t {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_TRIGGER_COUNT");
-        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultPtaOomTriggerCount;
-    }();
-    return trigger_count;
-}
-
-int64_t getForwardSyncTriggerCount()
-{
-    const static int64_t trigger_count = []() -> int64_t {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_FORWARD_SYNC_TRIGGER_COUNT");
-        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultForwardSyncTriggerCount;
-    }();
-    return trigger_count;
-}
-
-bool isPtaOomInjectEnabled()
-{
-    const static bool enabled = []() -> bool {
-        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_INJECT");
         return (env_val != nullptr) && (strtol(env_val, nullptr, 10) != 0);
     }();
     return enabled;
@@ -518,11 +475,6 @@ int64_t getTriggerAfterSeconds()
     return trigger_seconds;
 }
 
-bool isTimerTriggerEnabled()
-{
-    return getTriggerAfterSeconds() > 0;
-}
-
 void throwFullCardPtaOom(const char *context, int device);
 
 void ensurePtaOomTimerStarted()
@@ -545,7 +497,6 @@ void ensurePtaOomTimerStarted()
         std::this_thread::sleep_for(std::chrono::seconds(trigger_seconds));
         if (!g_pta_oom_injected.load()) {
             g_pta_oom_timer_expired.store(true);
-            g_pta_oom_pending_count.store(trigger_seconds);
             ASCEND_LOGI("PTA OOM timer expired after %lld seconds, pending throw on next hook",
                 static_cast<long long>(trigger_seconds));
         }
@@ -558,7 +509,42 @@ int64_t getElapsedSecondsSincePtaOomStart()
     return std::chrono::duration_cast<std::chrono::seconds>(now - g_pta_oom_start_time).count();
 }
 
-void maybeThrowPtaOomByTimer(const char *context, int device = -1)
+const bool kPtaOomTimerArmed = []() {
+    if (getTriggerAfterSeconds() > 0) {
+        ensurePtaOomTimerStarted();
+    }
+    return true;
+}();
+
+void throwFullCardPtaOom(const char *context, int device)
+{
+    if (g_pta_oom_injected.exchange(true)) {
+        return;
+    }
+
+    if (device < 0) {
+        NPU_CHECK_ERROR(c10_npu::GetDevice(&device));
+    }
+
+    NPUCachingAllocator::markAllBlockUnsafe(device);
+    c10_npu::set_npu_data_unsafe_flag(true);
+
+    const int64_t trigger_seconds = getTriggerAfterSeconds();
+    auto retmsg = std::string("NPU out of memory. Injected full-card PTA OOM on NPU ") +
+        std::to_string(device) +
+        ". All existing tensors on this device are marked unsafe. "
+        "Triggered after " + std::to_string(trigger_seconds) + " seconds";
+    if (context != nullptr && context[0] != '\0') {
+        retmsg += ", context is ";
+        retmsg += context;
+    }
+    retmsg += ". ";
+    retmsg += PTA_ERROR(ErrCode::MEMORY);
+    TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+}
+} // namespace
+
+void maybeThrowPtaOom(const char *context, int device)
 {
     const int64_t trigger_seconds = getTriggerAfterSeconds();
     if (trigger_seconds <= 0 || g_pta_oom_injected.load()) {
@@ -579,149 +565,7 @@ void maybeThrowPtaOomByTimer(const char *context, int device = -1)
         }
         return;
     }
-    g_pta_oom_pending_count.store(trigger_seconds);
     throwFullCardPtaOom(context, device);
-}
-
-const bool kPtaOomTimerArmed = []() {
-    if (getTriggerAfterSeconds() > 0) {
-        ensurePtaOomTimerStarted();
-    }
-    return true;
-}();
-
-bool isForwardBoundaryModeEnabled()
-{
-    return isPtaOomInjectEnabled() || getForwardSyncTriggerCount() > 0 || isTimerTriggerEnabled();
-}
-
-void throwFullCardPtaOom(const char *context, int device)
-{
-    if (g_pta_oom_injected.exchange(true)) {
-        return;
-    }
-
-    if (device < 0) {
-        NPU_CHECK_ERROR(c10_npu::GetDevice(&device));
-    }
-
-    NPUCachingAllocator::markAllBlockUnsafe(device);
-    c10_npu::set_npu_data_unsafe_flag(true);
-
-    const int64_t current_count = g_pta_oom_pending_count.load();
-    const int64_t trigger_seconds = getTriggerAfterSeconds();
-    auto retmsg = std::string("NPU out of memory. Injected full-card PTA OOM on NPU ") +
-        std::to_string(device) +
-        ". All existing tensors on this device are marked unsafe. ";
-    if (trigger_seconds > 0 && (g_pta_oom_timer_expired.load() || current_count == trigger_seconds)) {
-        retmsg += "Triggered after " + std::to_string(trigger_seconds) + " seconds";
-    } else {
-        retmsg += "Triggered after " + std::to_string(current_count) + " PTA operations";
-    }
-    if (context != nullptr && context[0] != '\0') {
-        retmsg += ", context is ";
-        retmsg += context;
-    }
-    retmsg += ". ";
-    retmsg += PTA_ERROR(ErrCode::MEMORY);
-    TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
-}
-} // namespace
-
-void recordPtaOomProgress(const char *context)
-{
-    if (g_pta_oom_injected.load()) {
-        return;
-    }
-
-    maybeThrowPtaOomByTimer(context);
-
-    const int64_t trigger_count = getPtaOomTriggerCount();
-    if (trigger_count <= 0) {
-        if (isForwardBoundaryModeEnabled()) {
-            maybeThrowPtaOomOnForwardBoundary(context);
-        }
-        return;
-    }
-
-    const int64_t current_count = ++g_pta_oom_call_count;
-    if (current_count > trigger_count && current_count < trigger_count + 2) {
-        g_pta_oom_pending_count.store(current_count);
-        g_pta_oom_pending.store(true);
-    }
-}
-
-void maybeThrowPtaOom(const char *context, int device)
-{
-    if (g_pta_oom_injected.load()) {
-        return;
-    }
-
-    maybeThrowPtaOomByTimer(context, device);
-
-    const int64_t trigger_count = getPtaOomTriggerCount();
-    if (trigger_count <= 0) {
-        if (isForwardBoundaryModeEnabled()) {
-            maybeThrowPtaOomOnForwardBoundary(context, device);
-        }
-        return;
-    }
-
-    if (g_pta_oom_pending.load()) {
-        g_pta_oom_pending.store(false);
-        throwFullCardPtaOom(context, device);
-        return;
-    }
-
-    recordPtaOomProgress(context);
-    if (g_pta_oom_pending.load()) {
-        g_pta_oom_pending.store(false);
-        throwFullCardPtaOom(context, device);
-    }
-}
-
-void maybeThrowPtaOomOnForwardBoundary(const char *context, int device)
-{
-    if (g_pta_oom_injected.load()) {
-        return;
-    }
-
-    maybeThrowPtaOomByTimer(context, device);
-
-    if (currentStreamCaptureStatus() != CaptureStatus::None) {
-        return;
-    }
-
-    const int64_t forward_count = ++g_pta_forward_boundary_count;
-    const int64_t warmup_skip = getWarmupSkipCount();
-    if (forward_count <= warmup_skip) {
-        if (isPtaOomDebugEnabled() && (forward_count % 1000 == 0 || forward_count == warmup_skip)) {
-            ASCEND_LOGI("PTA OOM forward boundary warmup: count=%lld skip=%lld context=%s",
-                static_cast<long long>(forward_count),
-                static_cast<long long>(warmup_skip),
-                context != nullptr ? context : "");
-        }
-        return;
-    }
-    const int64_t effective_count = forward_count - warmup_skip;
-
-    if (isPtaOomDebugEnabled()) {
-        ASCEND_LOGI("PTA OOM forward boundary: effective=%lld context=%s",
-            static_cast<long long>(effective_count),
-            context != nullptr ? context : "");
-    }
-
-    if (isPtaOomInjectEnabled()) {
-        throwFullCardPtaOom(context, device);
-        return;
-    }
-
-    const int64_t forward_trigger = getForwardSyncTriggerCount();
-    if (forward_trigger > 0 &&
-        effective_count > forward_trigger && effective_count < forward_trigger + 2) {
-        g_pta_oom_pending_count.store(effective_count);
-        throwFullCardPtaOom(context, device);
-    }
 }
 
 } // namespace c10_npu

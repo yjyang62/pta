@@ -510,7 +510,7 @@ NPUStatus emptyAllNPUStream(bool check_error)
     }
 
     if (check_error) {
-        maybeThrowPtaOomOnForwardBoundary("emptyAllNPUStream");
+        maybeThrowPtaOom("emptyAllNPUStream");
     }
 
     return NPU_STATUS_SUCCESS;
@@ -564,8 +564,8 @@ bool npuSynchronizeDevice(bool check_error)
             ASCEND_LOGE("MakeSureQueueEmpty fail, ret: %s", ret.c_str());
         }
     }
-    if (check_error && currentStreamCaptureStatus() == CaptureStatus::None) {
-        maybeThrowPtaOomOnForwardBoundary("npuSynchronizeDevice");
+    if (check_error) {
+        maybeThrowPtaOom("npuSynchronizeDevice");
     }
     auto acl_ret = c10_npu::acl::AclrtSynchronizeDeviceWithTimeout();
     if (acl_ret != ACL_ERROR_NONE) {

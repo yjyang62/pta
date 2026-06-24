@@ -1152,9 +1152,7 @@ public:
 
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
     {
-        if (currentStreamCaptureStatus() == CaptureStatus::None) {
-            maybeThrowPtaOom("malloc", device);
-        }
+        maybeThrowPtaOom("malloc", device);
 
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
         // done outside the lock because we don't know what locks the recorder needs
@@ -2937,8 +2935,8 @@ private:
                 } else {
                     TORCH_NPU_MEMORY_LOGI("Event: aclrtSynchronizeEvent is successfully executed, event=%p", event.get());
                 }
-                if (check_error && currentStreamCaptureStatus() == CaptureStatus::None) {
-                    maybeThrowPtaOomOnForwardBoundary("NPUCachingAllocator::synchronize_and_free_events");
+                if (check_error) {
+                    maybeThrowPtaOom("NPUCachingAllocator::synchronize_and_free_events");
                 }
 #ifndef BUILD_LIBTORCH
                 const c10_npu::impl::PyCallbackTrigger *trigger = c10_npu::impl::NPUTrace::getTrace();

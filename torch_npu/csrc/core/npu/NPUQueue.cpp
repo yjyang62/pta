@@ -349,7 +349,7 @@ NPUStatus Repository::MakeSureQueueEmpty(bool check_error)
             throw std::runtime_error(runtime_error);
         }
     }
-    if (check_error && currentStreamCaptureStatus() == CaptureStatus::None) {
+    if (check_error) {
         maybeThrowPtaOom("MakeSureQueueEmpty", device_idx);
     }
     logger->debug("MakeSureQueueEmpty: clearing successful, device = %d, write_idx = %u, read_idx = %u, status = %d",

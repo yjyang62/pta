@@ -608,9 +608,7 @@ aclError AclrtSynchronizeStreamWithTimeout(aclrtStream stream) {
         TORCH_CHECK(func_backup, "Failed to find function", "aclrtSynchronizeStreamWithTimeout and aclrtSynchronizeStream", PROF_ERROR(ErrCode::NOT_FOUND));
         ret = func_backup(stream);
     }
-    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::maybeThrowPtaOomOnForwardBoundary("AclrtSynchronizeStreamWithTimeout");
-    }
+    c10_npu::maybeThrowPtaOom("AclrtSynchronizeStreamWithTimeout");
     return ret;
 }
 
@@ -1013,9 +1011,7 @@ aclError AclrtSynchronizeDeviceWithTimeout(void)
         TORCH_CHECK(func_backup, "Failed to find function ", "aclrtSynchronizeDeviceWithTimeout and aclrtSynchronizeDevice", PTA_ERROR(ErrCode::NOT_FOUND));
         ret = func_backup();
     }
-    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::maybeThrowPtaOomOnForwardBoundary("AclrtSynchronizeDeviceWithTimeout");
-    }
+    c10_npu::maybeThrowPtaOom("AclrtSynchronizeDeviceWithTimeout");
     return ret;
 }
 
@@ -1087,9 +1083,7 @@ aclError AclmdlRIDebugPrint(aclmdlRI modelRI)
 aclError AclmdlRIExecuteAsync(aclmdlRI modelRI, aclrtStream stream)
 {
     ACL_CALL_LOG("aclmdlRIExecuteAsync", "modelRI=" << modelRI << ", stream=" << stream);
-    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::maybeThrowPtaOomOnForwardBoundary("AclmdlRIExecuteAsync");
-    }
+    c10_npu::maybeThrowPtaOom("AclmdlRIExecuteAsync");
     typedef aclError (*AclmdlRIExecuteAsync)(aclmdlRI, aclrtStream);
     static AclmdlRIExecuteAsync func = nullptr;
     if (func == nullptr) {
@@ -1588,9 +1582,8 @@ aclError AclrtMemcpyAsyncWithCondition(void *dst, size_t destMax, const void *sr
         func = (AclrtMemcpyAsyncWithConditionFunc)GET_FUNC(aclrtMemcpyAsyncWithCondition);
     }
     TORCH_CHECK(func, "Failed to find function ", "aclrtMemcpyAsyncWithCondition", PROF_ERROR(ErrCode::NOT_FOUND));
-    if (kind == aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST &&
-        c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::maybeThrowPtaOomOnForwardBoundary("AclrtMemcpyAsyncWithCondition");
+    if (kind == aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST) {
+        c10_npu::maybeThrowPtaOom("AclrtMemcpyAsyncWithCondition");
     }
     return func(dst, destMax, src, count, kind, stream);
 }
