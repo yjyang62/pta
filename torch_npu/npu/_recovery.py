@@ -1,3 +1,4 @@
+import os
 import torch
 from torch.distributed.distributed_c10d import _pg_map
 
@@ -52,6 +53,20 @@ def get_npu_tensor_unsafe_check_flag() -> bool:
 
 def _recovery_all_npu_stream(device: int) -> None:
     return torch_npu._C._recovery_all_npu_stream(device)
+
+
+def inject_oom(step: int = 1, trigger_step: int = None, device: int = None) -> None:
+    if trigger_step is None:
+        trigger_step = int(os.getenv("NPU_INJECT_OOM_STEP", "0"))
+    if trigger_step <= 0 or step != trigger_step:
+        return
+    if device is None:
+        device = torch_npu.npu.current_device()
+    raise torch.OutOfMemoryError(
+        f"NPU out of memory. Injected OOM on NPU {device}. "
+        f"Recover with: torch_npu.npu.restart_device({device}, rebuild_all_resources=True). "
+        + pta_error(ErrCode.MEMORY)
+    )
 
 
 def restart_device(device_id: int, rebuild_all_resources: int = False):
