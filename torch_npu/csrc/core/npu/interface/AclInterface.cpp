@@ -609,7 +609,7 @@ aclError AclrtSynchronizeStreamWithTimeout(aclrtStream stream) {
         ret = func_backup(stream);
     }
     if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
-        c10_npu::maybeThrowPtaOom("AclrtSynchronizeStreamWithTimeout");
+        c10_npu::maybeThrowPtaOomOnForwardBoundary("AclrtSynchronizeStreamWithTimeout");
     }
     return ret;
 }
@@ -998,8 +998,9 @@ aclError AclrtSynchronizeDeviceWithTimeout(void)
     typedef aclError (*AclrtSynchronizeDeviceWithTimeout)(int32_t);
     static AclrtSynchronizeDeviceWithTimeout func = (AclrtSynchronizeDeviceWithTimeout)GET_FUNC(aclrtSynchronizeDeviceWithTimeout);
     int32_t timeout = c10_npu::option::OptionsManager::GetACLDeviceSyncTimeout();
+    aclError ret = ACL_ERROR_NONE;
     if (func != nullptr) {
-        return func(timeout);
+        ret = func(timeout);
     } else {
         if (timeout > 0) {
             TORCH_NPU_WARN_ONCE("The ACL_DEVICE_SYNC_TIMEOUT does not take effect. If you want to enable this env, please upgrade CANN to the matching version.");
@@ -1010,8 +1011,12 @@ aclError AclrtSynchronizeDeviceWithTimeout(void)
             func_backup = (AclrtSynchronizeDevice)GET_FUNC(aclrtSynchronizeDevice);
         }
         TORCH_CHECK(func_backup, "Failed to find function ", "aclrtSynchronizeDeviceWithTimeout and aclrtSynchronizeDevice", PTA_ERROR(ErrCode::NOT_FOUND));
-        return func_backup();
+        ret = func_backup();
     }
+    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
+        c10_npu::maybeThrowPtaOomOnForwardBoundary("AclrtSynchronizeDeviceWithTimeout");
+    }
+    return ret;
 }
 
 aclError AclrtEventGetTimestamp(aclrtEvent event, uint64_t *timestamp)

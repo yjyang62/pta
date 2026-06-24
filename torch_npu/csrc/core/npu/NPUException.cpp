@@ -440,10 +440,12 @@ bool isCannOOM(const std::string &errMsg)
 
 namespace {
 static std::atomic<int64_t> g_pta_oom_call_count{0};
+static std::atomic<int64_t> g_pta_forward_boundary_count{0};
 static std::atomic<bool> g_pta_oom_injected{false};
 static std::atomic<bool> g_pta_oom_pending{false};
 static std::atomic<int64_t> g_pta_oom_pending_count{0};
 static constexpr int64_t kDefaultPtaOomTriggerCount = 400000;
+static constexpr int64_t kDefaultForwardSyncTriggerCount = 10;
 
 int64_t getPtaOomTriggerCount()
 {
@@ -452,6 +454,24 @@ int64_t getPtaOomTriggerCount()
         return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultPtaOomTriggerCount;
     }();
     return trigger_count;
+}
+
+int64_t getForwardSyncTriggerCount()
+{
+    const static int64_t trigger_count = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_FORWARD_SYNC_TRIGGER_COUNT");
+        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultForwardSyncTriggerCount;
+    }();
+    return trigger_count;
+}
+
+bool isPtaOomInjectEnabled()
+{
+    const static bool enabled = []() -> bool {
+        char *env_val = c10_npu::option::get_and_log_env("PTA_OOM_INJECT");
+        return (env_val != nullptr) && (strtol(env_val, nullptr, 10) != 0);
+    }();
+    return enabled;
 }
 
 void throwFullCardPtaOom(const char *context, int device)
@@ -507,6 +527,38 @@ void maybeThrowPtaOom(const char *context, int device)
         g_pta_oom_pending.store(false);
         throwFullCardPtaOom(context, device);
         return;
+    }
+
+    recordPtaOomProgress();
+    if (g_pta_oom_pending.load() && !g_pta_oom_injected.load()) {
+        g_pta_oom_pending.store(false);
+        throwFullCardPtaOom(context, device);
+    }
+}
+
+void maybeThrowPtaOomOnForwardBoundary(const char *context, int device)
+{
+    if (g_pta_oom_injected.load()) {
+        return;
+    }
+
+    if (isPtaOomInjectEnabled()) {
+        throwFullCardPtaOom(context, device);
+        return;
+    }
+
+    if (currentStreamCaptureStatus() != CaptureStatus::None) {
+        return;
+    }
+
+    const int64_t forward_trigger = getForwardSyncTriggerCount();
+    if (forward_trigger > 0) {
+        const int64_t forward_count = ++g_pta_forward_boundary_count;
+        if (forward_count > forward_trigger && forward_count < forward_trigger + 2) {
+            g_pta_oom_pending_count.store(forward_count);
+            throwFullCardPtaOom(context, device);
+            return;
+        }
     }
 
     recordPtaOomProgress();

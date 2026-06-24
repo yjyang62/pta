@@ -480,6 +480,9 @@ int ExecFuncOpApi(c10_npu::queue::QueueParas *in, aclrtStream stream)
 int MemcopyAsyncFunc(c10_npu::queue::QueueParas *in, aclrtStream stream)
 {
     auto cur_paras = static_cast<c10_npu::queue::CopyParas *>(in->paramVal);
+    if (c10_npu::currentStreamCaptureStatus() == c10_npu::CaptureStatus::None) {
+        c10_npu::maybeThrowPtaOomOnForwardBoundary("MemcopyAsyncFunc");
+    }
     logger->debug("MemcopyAsyncFunc Run.");
     aclError ret;
     bool flag;

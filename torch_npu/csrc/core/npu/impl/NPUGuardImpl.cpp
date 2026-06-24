@@ -12,6 +12,8 @@
 #include "torch_npu/csrc/core/NPUSerialization.h"
 #include "torch_npu/csrc/core/npu/NPUHooksInterface.h"
 #include "torch_npu/csrc/core/npu/NPUEventManager.h"
+#include "torch_npu/csrc/core/npu/NPUException.h"
+#include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
 
 #ifndef BUILD_LIBTORCH
 #include "torch_npu/csrc/sanitizer/NPUTrace.h"
@@ -221,6 +223,9 @@ void NPUGuardImpl::synchronizeEvent(void* event) const
 
     NPU_CHECK_ERROR_WITHOUT_UCE(aclrtSynchronizeEvent(npu_event));
     ASCEND_LOGI("Event: aclrtSynchronizeEvent is successfully executed, event=%p", npu_event);
+    if (currentStreamCaptureStatus() == CaptureStatus::None) {
+        maybeThrowPtaOomOnForwardBoundary("NPUGuardImpl::synchronizeEvent");
+    }
 #ifndef BUILD_LIBTORCH
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
     if (C10_UNLIKELY(trigger)) {

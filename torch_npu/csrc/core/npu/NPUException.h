@@ -340,6 +340,8 @@ void recordPtaOomProgress();
 
 void maybeThrowPtaOom(const char *context = nullptr, int device = -1);
 
+void maybeThrowPtaOomOnForwardBoundary(const char *context = nullptr, int device = -1);
+
 bool ShouldAppendDeviceErrorVerbose();
 
 void clear_device_error_info();
