@@ -14,6 +14,7 @@
 #include "torch_npu/csrc/aten/CustomFunctions.h"
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
 #include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
+#include "torch_npu/csrc/core/npu/PtaOomInjector.h"
 #include "torch_npu/csrc/logging/LogContext.h"
 #ifndef BUILD_LIBTORCH
 #include "torch_npu/csrc/sanitizer/NPUTrace.h"
@@ -130,6 +131,8 @@ OpCommand& OpCommand::Output(at::Tensor &output, const string &descName,
 
 void OpCommand::Run()
 {
+    const string &op_name = aclCmd->GetName();
+    c10_npu::pta_oom::maybeThrowOpOom(op_name);
     // Check for npu graph
     if (aclCmd->CheckCustomHandlerNull()) {
         g_used_aclop = true;
@@ -142,7 +145,6 @@ void OpCommand::Run()
     }
 
     aclCmd->SetEnginePriority();
-    const string &op_name = aclCmd->GetName();
 #ifndef BUILD_LIBTORCH
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
 #endif
@@ -184,6 +186,7 @@ void OpCommand::Run()
 
 void OpCommand::RunOpApi(const string &op_name, PROC_FUNC func, bool sync)
 {
+    c10_npu::pta_oom::maybeThrowOpOom(op_name);
 #ifndef BUILD_LIBTORCH
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
 #endif
@@ -231,6 +234,7 @@ void OpCommand::RunOpApi(const string &op_name, PROC_FUNC func, bool sync)
 
 void OpCommand::RunOpApiV2(const string &op_name, const PROC_FUNC &func, bool sync)
 {
+    c10_npu::pta_oom::maybeThrowOpOom(op_name);
 #ifndef BUILD_LIBTORCH
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
 #endif
@@ -284,6 +288,7 @@ void OpCommand::RunOpApiV2(const string &op_name, const PROC_FUNC &func, bool sy
 
 void OpCommand::RunOpApiV3(const string &op_name, const PROC_FUNC &func, bool sync, c10_npu::NPUStream *task_stream)
 {
+    c10_npu::pta_oom::maybeThrowOpOom(op_name);
 #ifndef BUILD_LIBTORCH
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
 #endif

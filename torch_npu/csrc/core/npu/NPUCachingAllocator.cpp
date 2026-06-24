@@ -23,6 +23,7 @@
 #include "torch_npu/csrc/core/npu/NPUWorkspaceAllocator.h"
 #include "torch_npu/csrc/core/npu/NPURecovery.h"
 #include "torch_npu/csrc/core/npu/NPUGuard.h"
+#include "torch_npu/csrc/core/npu/PtaOomInjector.h"
 #include "NPUBlockHandle.h"
 #include "torch_npu/csrc/core/npu/NpuVariables.h"
 #include "torch_npu/csrc/core/npu/GetCANNInfo.h"
@@ -107,7 +108,6 @@ const std::string kMinDriverVersion = "25.0.RC1";     // minimum driver version 
 const std::string kCannModule = "CANN";               // cann module name
 constexpr int kPrecision = 4;                         // precision of the memory usage information
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
-static int64_t g_malloc_call_count = 0;
 static char SHAREABLE_HANDLE_VERSION = 1;
 enum ShareableHandleType : char {
     SHAREABLE_NPU_MALLOC = 'c',
@@ -1152,10 +1152,7 @@ public:
     // Thus, do not call a public method from another public method.
 
     Block *malloc(int device, size_t orig_size, aclrtStream stream, uint8_t allocator_type = 0)
-    {           
-        g_malloc_call_count++;
-        auto retmsg = std::string("NPU out of memory. Tried to allocate more than 1EB memory.");
-
+    {
         TORCH_NPU_MEMORY_LOGD("Allocating memory: size=%zu, device=%d", orig_size, device);
         // done outside the lock because we don't know what locks the recorder needs
         // to have...
@@ -3516,6 +3513,7 @@ public:
         
         int device = 0;
         NPU_CHECK_ERROR(c10_npu::GetDevice(&device));
+        c10_npu::pta_oom::maybeThrowAllocOom(device, size);
         LazySetDevice(device);
         void *devPtr = nullptr;
         void (*deleteFunc)(void *) = &local_raw_delete;
@@ -3546,6 +3544,7 @@ public:
         }
         int device = 0;
         NPU_CHECK_ERROR(c10_npu::GetDevice(&device));
+        c10_npu::pta_oom::maybeThrowAllocOom(device, size);
         void *realPtr = nullptr;
         void (*deleteFunc)(void *) = &local_raw_delete;
 
