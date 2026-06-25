@@ -1,4 +1,6 @@
 #include <ATen/record_function.h>
+#include <atomic>
+#include <cstdlib>
 #include <string>
 #include <chrono>
 
@@ -15,6 +17,7 @@
 #include "torch_npu/csrc/core/npu/NPUFunctions.h"
 #include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
 #include "torch_npu/csrc/logging/LogContext.h"
+#include "third_party/hccl/inc/hccl/hccl_types.h"
 #ifndef BUILD_LIBTORCH
 #include "torch_npu/csrc/sanitizer/NPUTrace.h"
 #endif
@@ -22,6 +25,9 @@
 namespace {
 const uint64_t kStringOffset = 16UL;
 const std::string kStringDType = "string";
+constexpr int64_t kDefaultHcclOomTriggerCount = 6000;
+std::atomic<int64_t> g_hccl_oom_call_count{0};
+std::atomic<bool> g_hccl_oom_triggered{false};
 static std::unordered_map<at::ScalarType, std::vector<double>> floating_limits_map{
     {at::ScalarType::Double, {std::numeric_limits<double>::max(), std::numeric_limits<double>::min()}},
     {at::ScalarType::Float, {std::numeric_limits<float>::max(), std::numeric_limits<float>::min()}},
@@ -35,6 +41,44 @@ static std::unordered_map<at::ScalarType, std::vector<long>> integral_limits_map
     {at::ScalarType::Byte, {std::numeric_limits<uint8_t>::max(), std::numeric_limits<uint8_t>::min()}},
     {at::ScalarType::Char, {std::numeric_limits<int8_t>::max(), std::numeric_limits<int8_t>::min()}},
     {at::ScalarType::Short, {std::numeric_limits<int16_t>::max(), std::numeric_limits<int16_t>::min()}}};
+
+int64_t getHcclOomTriggerCount()
+{
+    const static int64_t trigger_count = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_TRIGGER_COUNT");
+        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultHcclOomTriggerCount;
+    }();
+    return trigger_count;
+}
+
+bool isHcclCommunicationOp(const std::string& op_name)
+{
+    return op_name.rfind("Hccl", 0) == 0;
+}
+
+void maybeThrowHcclOom(const std::string& op_name)
+{
+    if (!isHcclCommunicationOp(op_name)) {
+        return;
+    }
+    if (c10_npu::currentStreamCaptureStatusMayInitCtx() != c10_npu::CaptureStatus::None) {
+        return;
+    }
+
+    const int64_t trigger_count = getHcclOomTriggerCount();
+    if (trigger_count <= 0) {
+        return;
+    }
+
+    const int64_t current_count = ++g_hccl_oom_call_count;
+    if (current_count >= trigger_count && !g_hccl_oom_triggered.exchange(true)) {
+        auto retmsg = std::string("HCCL function error: Failed to allocate memory. "
+            "Injected HCCL OOM after ") + std::to_string(current_count) +
+            " HCCL op api calls, op name is " + op_name +
+            ", error code is " + std::to_string(HCCL_E_OOM) + " " + DIST_ERROR(ErrCode::HCCL) + ".";
+        TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
+    }
+}
 } // namespace
 
 std::atomic<bool> g_used_aclop{false};
@@ -299,6 +343,7 @@ void OpCommand::RunOpApiV3(const string &op_name, const PROC_FUNC &func, bool sy
 
         c10_npu::queue::QueueParas params(c10_npu::queue::EXECUTE_OPAPI_V2, sizeof(ExecuteParasOpApiV2), &execParams);
         c10_npu::enCurrentNPUStream(&params, -1, task_stream);
+        maybeThrowHcclOom(op_name);
 #ifndef BUILD_LIBTORCH
         at_npu::native::NpuUtils::ProfReportMarkDataToNpuProfiler(1, op_name, params.correlation_id);
 #endif
@@ -314,6 +359,7 @@ void OpCommand::RunOpApiV3(const string &op_name, const PROC_FUNC &func, bool sy
                 NPU_CHECK_ERROR(c10_npu::acl::AclrtSynchronizeStreamWithTimeout(stream));
             }
         }
+        maybeThrowHcclOom(op_name);
 #ifndef BUILD_LIBTORCH
         if (C10_UNLIKELY(trigger)) {
             trigger->traceNpuAclFinishExecution(op_name);
