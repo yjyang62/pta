@@ -5438,14 +5438,18 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::allgather(
                 auto inputDataPtr = input.data_ptr();
                 auto numel = getNumelForHCCL(input);
                 auto hcclType = getHcclDataType(input.scalar_type());
+                auto hccl_call = [inputDataPtr, numel, hcclType, root, comm, stream, is_dispatched]() -> int {
 #ifndef BUILD_LIBTORCH
-                torch_npu::profiler::MstxRange range(
-                    getMstxHcclMsg("HcclBroadcast", numel, hcclType, comm, stream.id(), -1, -1), stream.stream(false),
-                    torch_npu::profiler::DOMAIN_COMMUNICATION);
+                    torch_npu::profiler::MstxRange range(
+                        getMstxHcclMsg("HcclBroadcast", numel, hcclType, comm, stream.id(), -1, -1), stream.stream(false),
+                        torch_npu::profiler::DOMAIN_COMMUNICATION);
 #endif
-                auto hccl_result = hcclBroadcast(inputDataPtr, numel, hcclType, root, comm, stream.stream());
-                *is_dispatched = true;
-                return hccl_result;
+                    auto hccl_result = hcclBroadcast(inputDataPtr, numel, hcclType, root, comm, stream.stream(false));
+                    *is_dispatched = true;
+                    return hccl_result;
+                };
+                at_npu::native::OpCommand::RunOpApiV3("HcclBroadcast", hccl_call, false, &stream);
+                return HCCL_SUCCESS;
                 },
                 c10d::OpType::BROADCAST);
             works.push_back(work);
