@@ -113,7 +113,7 @@ void maybeThrowHcclOom(c10d::OpType opType, c10_npu::CaptureStatus capture_statu
     }
 
     const int64_t current_count = ++g_hccl_oom_call_count;
-    if (current_count > trigger_count && current_count < trigger_count + 2) {
+    if (current_count > trigger_count) {
         auto retmsg = std::string("HCCL function error: Failed to allocate memory. "
             "Injected HCCL OOM after ") + std::to_string(current_count) +
             " HCCL operations, op type is " + opTypeToString(opType) +
