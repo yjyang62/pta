@@ -1,6 +1,13 @@
 #include <ATen/record_function.h>
 #include <string>
 #include <chrono>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <set>
 
 #include "torch_npu/csrc/framework/OpCommand.h"
 #include "torch_npu/csrc/core/npu/register/OptionsManager.h"
@@ -22,6 +29,9 @@
 namespace {
 const uint64_t kStringOffset = 16UL;
 const std::string kStringDType = "string";
+std::mutex g_op_oom_mutex;
+std::map<int, int64_t> g_op_oom_call_counts;
+std::set<int> g_op_oom_triggered_devices;
 static std::unordered_map<at::ScalarType, std::vector<double>> floating_limits_map{
     {at::ScalarType::Double, {std::numeric_limits<double>::max(), std::numeric_limits<double>::min()}},
     {at::ScalarType::Float, {std::numeric_limits<float>::max(), std::numeric_limits<float>::min()}},
@@ -35,6 +45,83 @@ static std::unordered_map<at::ScalarType, std::vector<long>> integral_limits_map
     {at::ScalarType::Byte, {std::numeric_limits<uint8_t>::max(), std::numeric_limits<uint8_t>::min()}},
     {at::ScalarType::Char, {std::numeric_limits<int8_t>::max(), std::numeric_limits<int8_t>::min()}},
     {at::ScalarType::Short, {std::numeric_limits<int16_t>::max(), std::numeric_limits<int16_t>::min()}}};
+
+int64_t getOpOomTriggerCount()
+{
+    const static int64_t trigger_count = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("NPU_OP_OOM_TRIGGER_COUNT");
+        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : 0;
+    }();
+    return trigger_count;
+}
+
+bool isOpOomTriggerRepeatable()
+{
+    const static bool repeatable = []() -> bool {
+        char *env_val = c10_npu::option::get_and_log_env("NPU_OP_OOM_TRIGGER_MODE");
+        if (env_val == nullptr) {
+            return false;
+        }
+        std::string mode(env_val);
+        std::transform(mode.begin(), mode.end(), mode.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return mode == "always" || mode == "repeat" || mode == "1";
+    }();
+    return repeatable;
+}
+
+std::string getOpOomTriggerFile()
+{
+    const static std::string trigger_file = []() -> std::string {
+        char *env_val = c10_npu::option::get_and_log_env("NPU_OP_OOM_TRIGGER_FILE");
+        if (env_val != nullptr) {
+            return std::string(env_val);
+        }
+        env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_FILE");
+        return (env_val != nullptr) ? std::string(env_val) : std::string();
+    }();
+    return trigger_file;
+}
+
+bool isTriggerFilePresent(const std::string &path)
+{
+    if (path.empty()) {
+        return false;
+    }
+    std::ifstream file(path);
+    return file.good();
+}
+
+bool shouldThrowOpOom(int device)
+{
+    const auto trigger_file = getOpOomTriggerFile();
+    const int64_t trigger_count = getOpOomTriggerCount();
+    if (trigger_file.empty() && trigger_count <= 0) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> guard(g_op_oom_mutex);
+    const bool file_triggered = isTriggerFilePresent(trigger_file);
+    const int64_t current_count = ++g_op_oom_call_counts[device];
+    const bool count_triggered = trigger_count > 0 && current_count >= trigger_count;
+    if (!file_triggered && !count_triggered) {
+        return false;
+    }
+    if (!isOpOomTriggerRepeatable() && g_op_oom_triggered_devices.count(device) > 0) {
+        return false;
+    }
+    g_op_oom_triggered_devices.insert(device);
+    return true;
+}
+
+std::string getInjectedOpOomMessage(const std::string &op_name, int device)
+{
+    std::lock_guard<std::mutex> guard(g_op_oom_mutex);
+    return std::string("NPU out of memory. Failed to allocate memory. Injected NPU op OOM on device ") +
+        std::to_string(device) + " after " + std::to_string(g_op_oom_call_counts[device]) +
+        " NPU operations, op type is " + op_name +
+        ". This is a synthetic OOM fault for recovery validation.";
+}
 } // namespace
 
 std::atomic<bool> g_used_aclop{false};
@@ -147,6 +234,13 @@ void OpCommand::Run()
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
 #endif
     auto stream = c10_npu::getCurrentNPUStream();
+    if (shouldThrowOpOom(stream.device_index())) {
+        auto injected_oom_msg = getInjectedOpOomMessage(op_name, stream.device_index());
+        ASCEND_LOGE("%s", injected_oom_msg.c_str());
+        aclCmd->releaseSource();
+        aclCmds->Pop();
+        TORCH_CHECK_WITH(OutOfMemoryError, false, injected_oom_msg.c_str());
+    }
     if (!stream.isSyncLaunchStream() && c10_npu::option::OptionsManager::GetTaskQueueEnable() && !sync) {
         RECORD_FUNCTION(op_name, std::vector<c10::IValue>({}));
 #ifndef BUILD_LIBTORCH
@@ -188,6 +282,11 @@ void OpCommand::RunOpApi(const string &op_name, PROC_FUNC func, bool sync)
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
 #endif
     auto stream = c10_npu::getCurrentNPUStream();
+    if (shouldThrowOpOom(stream.device_index())) {
+        auto injected_oom_msg = getInjectedOpOomMessage(op_name, stream.device_index());
+        ASCEND_LOGE("%s", injected_oom_msg.c_str());
+        TORCH_CHECK_WITH(OutOfMemoryError, false, injected_oom_msg.c_str());
+    }
     if (!stream.isSyncLaunchStream() && c10_npu::option::OptionsManager::GetTaskQueueEnable()) {
         RECORD_FUNCTION(op_name, std::vector<c10::IValue>({}));
 #ifndef BUILD_LIBTORCH
@@ -235,6 +334,11 @@ void OpCommand::RunOpApiV2(const string &op_name, const PROC_FUNC &func, bool sy
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
 #endif
     auto stream = c10_npu::getCurrentNPUStream();
+    if (shouldThrowOpOom(stream.device_index())) {
+        auto injected_oom_msg = getInjectedOpOomMessage(op_name, stream.device_index());
+        ASCEND_LOGE("%s", injected_oom_msg.c_str());
+        TORCH_CHECK_WITH(OutOfMemoryError, false, injected_oom_msg.c_str());
+    }
     if (!stream.isSyncLaunchStream() && c10_npu::option::OptionsManager::GetTaskQueueEnable()) {
         RECORD_FUNCTION(op_name, std::vector<c10::IValue>({}));
 #ifndef BUILD_LIBTORCH
@@ -288,6 +392,12 @@ void OpCommand::RunOpApiV3(const string &op_name, const PROC_FUNC &func, bool sy
     const c10_npu::impl::PyCallbackTrigger* trigger = c10_npu::impl::NPUTrace::getTrace();
 #endif
     auto stream = c10_npu::getCurrentNPUStream();
+    auto inject_device = task_stream == nullptr ? stream.device_index() : task_stream->device_index();
+    if (shouldThrowOpOom(inject_device)) {
+        auto injected_oom_msg = getInjectedOpOomMessage(op_name, inject_device);
+        ASCEND_LOGE("%s", injected_oom_msg.c_str());
+        TORCH_CHECK_WITH(OutOfMemoryError, false, injected_oom_msg.c_str());
+    }
     if (!stream.isSyncLaunchStream() && c10_npu::option::OptionsManager::GetTaskQueueEnable()) {
         RECORD_FUNCTION(op_name, std::vector<c10::IValue>({}));
 #ifndef BUILD_LIBTORCH

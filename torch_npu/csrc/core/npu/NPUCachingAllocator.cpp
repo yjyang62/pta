@@ -8,6 +8,8 @@
 #include <set>
 #include <vector>
 #include <fstream>
+#include <cctype>
+#include <cstdlib>
 
 #include <c10/core/Allocator.h>
 #include <c10/util/flat_hash_map.h>
@@ -27,6 +29,7 @@
 #include "torch_npu/csrc/core/npu/NpuVariables.h"
 #include "torch_npu/csrc/core/npu/GetCANNInfo.h"
 #include "torch_npu/csrc/core/npu/sys_ctrl/npu_sys_ctrl.h"
+#include "torch_npu/csrc/core/npu/register/OptionsManager.h"
 #include "torch_npu/csrc/core/npu/NPUEvent.h"
 #include "torch_npu/csrc/profiler/npu_profiler.h"
 #ifndef BUILD_LIBTORCH
@@ -108,6 +111,8 @@ const std::string kCannModule = "CANN";               // cann module name
 constexpr int kPrecision = 4;                         // precision of the memory usage information
 constexpr size_t kLazyQuerySize = 512;                // lazy query event size
 static int64_t g_malloc_call_count = 0;
+static std::map<int, int64_t> g_allocator_oom_call_counts;
+static std::set<int> g_allocator_oom_triggered_devices;
 static char SHAREABLE_HANDLE_VERSION = 1;
 enum ShareableHandleType : char {
     SHAREABLE_NPU_MALLOC = 'c',
@@ -115,6 +120,80 @@ enum ShareableHandleType : char {
 };
 
 using StatTypes = std::array<bool, static_cast<size_t>(StatType::NUM_TYPES)>;
+
+int64_t getAllocatorOomTriggerCount()
+{
+    const static int64_t trigger_count = []() -> int64_t {
+        char *env_val = c10_npu::option::get_and_log_env("NPU_ALLOCATOR_OOM_TRIGGER_COUNT");
+        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : 0;
+    }();
+    return trigger_count;
+}
+
+bool isAllocatorOomTriggerRepeatable()
+{
+    const static bool repeatable = []() -> bool {
+        char *env_val = c10_npu::option::get_and_log_env("NPU_ALLOCATOR_OOM_TRIGGER_MODE");
+        if (env_val == nullptr) {
+            return false;
+        }
+        std::string mode(env_val);
+        std::transform(mode.begin(), mode.end(), mode.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return mode == "always" || mode == "repeat" || mode == "1";
+    }();
+    return repeatable;
+}
+
+std::string getNpuOomTriggerFile()
+{
+    const static std::string trigger_file = []() -> std::string {
+        char *env_val = c10_npu::option::get_and_log_env("NPU_ALLOCATOR_OOM_TRIGGER_FILE");
+        if (env_val != nullptr) {
+            return std::string(env_val);
+        }
+        env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_FILE");
+        return (env_val != nullptr) ? std::string(env_val) : std::string();
+    }();
+    return trigger_file;
+}
+
+bool isTriggerFilePresent(const std::string &path)
+{
+    if (path.empty()) {
+        return false;
+    }
+    std::ifstream file(path);
+    return file.good();
+}
+
+bool shouldThrowAllocatorOom(int device)
+{
+    const auto trigger_file = getNpuOomTriggerFile();
+    const int64_t trigger_count = getAllocatorOomTriggerCount();
+    if (trigger_file.empty() && trigger_count <= 0) {
+        return false;
+    }
+
+    const bool file_triggered = isTriggerFilePresent(trigger_file);
+    const int64_t current_count = ++g_allocator_oom_call_counts[device];
+    const bool count_triggered = trigger_count > 0 && current_count >= trigger_count;
+    if (!file_triggered && !count_triggered) {
+        return false;
+    }
+    if (!isAllocatorOomTriggerRepeatable() && g_allocator_oom_triggered_devices.count(device) > 0) {
+        return false;
+    }
+    g_allocator_oom_triggered_devices.insert(device);
+    return true;
+}
+
+std::string getInjectedAllocatorOomMessage(int device)
+{
+    return std::string("NPU out of memory. Failed to allocate memory. Injected NPU allocator OOM on device ") +
+        std::to_string(device) + " after " + std::to_string(g_allocator_oom_call_counts[device]) +
+        " allocation attempts. This is a synthetic OOM fault for recovery validation.";
+}
 
 void update_stat(Stat &stat, int64_t amount)
 {
@@ -1166,6 +1245,11 @@ public:
         if (device == -1) {
             NPU_CHECK_ERROR(c10_npu::GetDevice(&device));
             TORCH_NPU_MEMORY_LOGD("Using device: %d", device);
+        }
+        if (shouldThrowAllocatorOom(device)) {
+            auto injected_oom_msg = getInjectedAllocatorOomMessage(device);
+            TORCH_NPU_MEMORY_LOGE("%s", injected_oom_msg.c_str());
+            TORCH_CHECK_WITH(OutOfMemoryError, false, injected_oom_msg.c_str());
         }
 
         if (!CachingAllocatorConfig::multi_stream_lazy_reclaim() && C10_LIKELY(captures_underway.empty())) {
