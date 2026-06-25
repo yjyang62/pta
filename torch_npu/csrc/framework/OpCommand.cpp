@@ -49,7 +49,7 @@ static std::unordered_map<at::ScalarType, std::vector<long>> integral_limits_map
 int64_t getOpOomTriggerCount()
 {
     const static int64_t trigger_count = []() -> int64_t {
-        char *env_val = c10_npu::option::get_and_log_env("NPU_OP_OOM_TRIGGER_COUNT");
+        char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_COUNT");
         if (env_val == nullptr) {
             env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_COUNT");
         }

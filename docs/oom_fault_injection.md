@@ -12,7 +12,7 @@ Use op-level automatic triggering for both prefill and decode nodes. Add these
 values to the MindIE launch environment:
 
 ```text
-NPU_OP_OOM_TRIGGER_COUNT=1
+HCCL_OOM_COUNT=1
 NPU_ALLOCATOR_OOM_TRIGGER_COUNT=0
 HCCL_OOM_TRIGGER_COUNT=0
 ```
@@ -24,7 +24,7 @@ once per local device by default.
 
 This is the preferred mode for Qwen-235B PD separation tests because it does not
 depend on hitting a specific HCCL operation and does not require real HBM
-pressure. Increase `NPU_OP_OOM_TRIGGER_COUNT` if the fault must be delayed until
+pressure. Increase `HCCL_OOM_COUNT` if the fault must be delayed until
 after warmup requests.
 
 ## Environment variables
@@ -36,7 +36,7 @@ after warmup requests.
 | `NPU_ALLOCATOR_OOM_TRIGGER_FILE` | allocator | unset | Allocator-only trigger file. Overrides the shared file for allocator injection. |
 | `HCCL_OOM_TRIGGER_FILE` | HCCL | unset | HCCL-only trigger file. Overrides the shared file for HCCL injection. |
 | `NPU_OOM_TRIGGER_COUNT` | op, allocator, HCCL fallback | `0` for op/allocator, HCCL keeps its legacy default if unset | Shared automatic trigger count. |
-| `NPU_OP_OOM_TRIGGER_COUNT` | op | `0` | Inject when per-device op count reaches this value. `0` disables count injection. |
+| `HCCL_OOM_COUNT` | op | `0` | Inject when per-device op count reaches this value. `0` disables count injection. |
 | `NPU_ALLOCATOR_OOM_TRIGGER_COUNT` | allocator | `0` | Inject when per-device allocation count reaches this value. `0` disables count injection. |
 | `HCCL_OOM_TRIGGER_COUNT` | HCCL | `6000` | Inject when HCCL call count reaches this value. `0` disables count injection. |
 | `NPU_OOM_TRIGGER_MODE` | op, allocator, HCCL fallback | `once` | Shared one-shot or repeated mode. |
