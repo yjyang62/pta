@@ -9,6 +9,7 @@
 #include <iostream>
 #include <functional>
 #include <cstdlib>
+#include <cctype>
 #include <linux/limits.h>
 
 #ifndef BUILD_LIBTORCH
@@ -78,6 +79,7 @@ constexpr int32_t NSLB_JOBID_OFFSET = 32;
 static constexpr int CoalActive = 0x01, CoalColl = 0x02, CoalP2P = 0x04;
 static constexpr int64_t kDefaultHcclOomTriggerCount = 6000;
 static std::atomic<int64_t> g_hccl_oom_call_count{0};
+static std::atomic<bool> g_hccl_oom_triggered{false};
 
 // HCCL ReduceOp mapping
 std::map<c10d::ReduceOp, HcclReduceOp> hcclOp = {
@@ -96,9 +98,58 @@ int64_t getHcclOomTriggerCount()
 {
     const static int64_t trigger_count = []() -> int64_t {
         char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_TRIGGER_COUNT");
+        if (env_val != nullptr) {
+            return strtol(env_val, nullptr, 10);
+        }
+        env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_COUNT");
         return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultHcclOomTriggerCount;
     }();
     return trigger_count;
+}
+
+bool isHcclOomTriggerRepeatable()
+{
+    const static bool repeatable = []() -> bool {
+        char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_TRIGGER_MODE");
+        if (env_val == nullptr) {
+            env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_MODE");
+        }
+        if (env_val == nullptr) {
+            return false;
+        }
+        std::string mode(env_val);
+        std::transform(mode.begin(), mode.end(), mode.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return mode == "always" || mode == "repeat" || mode == "1";
+    }();
+    return repeatable;
+}
+
+std::string getHcclOomTriggerFile()
+{
+    const static std::string trigger_file = []() -> std::string {
+        char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_TRIGGER_FILE");
+        if (env_val != nullptr) {
+            return std::string(env_val);
+        }
+        env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_FILE");
+        return (env_val != nullptr) ? std::string(env_val) : std::string();
+    }();
+    return trigger_file;
+}
+
+bool shouldThrowHcclOom(int64_t current_count, int64_t trigger_count)
+{
+    const auto trigger_file = getHcclOomTriggerFile();
+    const bool file_triggered = !trigger_file.empty() && isFileExists(trigger_file);
+    const bool count_triggered = trigger_count > 0 && current_count >= trigger_count;
+    if (!file_triggered && !count_triggered) {
+        return false;
+    }
+    if (!isHcclOomTriggerRepeatable() && g_hccl_oom_triggered.exchange(true)) {
+        return false;
+    }
+    return true;
 }
 
 void maybeThrowHcclOom(c10d::OpType opType, c10_npu::CaptureStatus capture_status)
@@ -108,12 +159,8 @@ void maybeThrowHcclOom(c10d::OpType opType, c10_npu::CaptureStatus capture_statu
     }
 
     const int64_t trigger_count = getHcclOomTriggerCount();
-    if (trigger_count <= 0) {
-        return;
-    }
-
     const int64_t current_count = ++g_hccl_oom_call_count;
-    if (current_count > trigger_count && current_count < trigger_count + 2) {
+    if (shouldThrowHcclOom(current_count, trigger_count)) {
         auto retmsg = std::string("HCCL function error: Failed to allocate memory. "
             "Injected HCCL OOM after ") + std::to_string(current_count) +
             " HCCL operations, op type is " + opTypeToString(opType) +
