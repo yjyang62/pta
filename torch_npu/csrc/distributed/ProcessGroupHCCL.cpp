@@ -98,6 +98,10 @@ int64_t getHcclOomTriggerCount()
 {
     const static int64_t trigger_count = []() -> int64_t {
         char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_TRIGGER_COUNT");
+        if (env_val != nullptr) {
+            return strtol(env_val, nullptr, 10);
+        }
+        env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_COUNT");
         return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultHcclOomTriggerCount;
     }();
     return trigger_count;
@@ -107,6 +111,9 @@ bool isHcclOomTriggerRepeatable()
 {
     const static bool repeatable = []() -> bool {
         char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_TRIGGER_MODE");
+        if (env_val == nullptr) {
+            env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_MODE");
+        }
         if (env_val == nullptr) {
             return false;
         }

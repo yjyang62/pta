@@ -311,15 +311,13 @@ class TestMode(TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("Injected NPU allocator OOM", error)
 
-    def test_synthetic_oom_trigger_file(self):
+    def test_synthetic_shared_oom_count_inject(self):
         command = [
             "python",
             "-c",
-            "import os; import tempfile; import torch; import torch_npu; "
+            "import os; import torch; import torch_npu; "
             "x = torch.empty((1,), device='npu:0'); "
-            "trigger_file = tempfile.NamedTemporaryFile(delete=False); "
-            "trigger_file.close(); "
-            "os.environ['NPU_OOM_TRIGGER_FILE'] = trigger_file.name; "
+            "os.environ['NPU_OOM_TRIGGER_COUNT'] = '1'; "
             "(x + 1).cpu()",
         ]
         process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

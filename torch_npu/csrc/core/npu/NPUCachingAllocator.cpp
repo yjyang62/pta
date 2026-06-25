@@ -125,6 +125,9 @@ int64_t getAllocatorOomTriggerCount()
 {
     const static int64_t trigger_count = []() -> int64_t {
         char *env_val = c10_npu::option::get_and_log_env("NPU_ALLOCATOR_OOM_TRIGGER_COUNT");
+        if (env_val == nullptr) {
+            env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_COUNT");
+        }
         return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : 0;
     }();
     return trigger_count;
@@ -134,6 +137,9 @@ bool isAllocatorOomTriggerRepeatable()
 {
     const static bool repeatable = []() -> bool {
         char *env_val = c10_npu::option::get_and_log_env("NPU_ALLOCATOR_OOM_TRIGGER_MODE");
+        if (env_val == nullptr) {
+            env_val = c10_npu::option::get_and_log_env("NPU_OOM_TRIGGER_MODE");
+        }
         if (env_val == nullptr) {
             return false;
         }
