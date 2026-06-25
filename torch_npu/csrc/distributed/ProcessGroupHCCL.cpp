@@ -76,9 +76,6 @@ using hcclUs = std::chrono::steady_clock::time_point;
 constexpr int32_t MAX_GROUP_NAME_LEN = 128;
 constexpr int32_t NSLB_JOBID_OFFSET = 32;
 static constexpr int CoalActive = 0x01, CoalColl = 0x02, CoalP2P = 0x04;
-static constexpr int64_t kDefaultHcclOomTriggerCount = 6000;
-static std::atomic<int64_t> g_hccl_oom_call_count{0};
-
 // HCCL ReduceOp mapping
 std::map<c10d::ReduceOp, HcclReduceOp> hcclOp = {
     {c10d::ReduceOp::MIN, HCCL_REDUCE_MIN},
@@ -92,35 +89,6 @@ std::map<c10d::ReduceOp, std::string> unsupportedOp = {
     {c10d::ReduceOp::BOR, "BOR"},
     {c10d::ReduceOp::BXOR, "BXOR"}
 };
-int64_t getHcclOomTriggerCount()
-{
-    const static int64_t trigger_count = []() -> int64_t {
-        char *env_val = c10_npu::option::get_and_log_env("HCCL_OOM_TRIGGER_COUNT");
-        return (env_val != nullptr) ? strtol(env_val, nullptr, 10) : kDefaultHcclOomTriggerCount;
-    }();
-    return trigger_count;
-}
-
-void maybeThrowHcclOom(c10d::OpType opType, c10_npu::CaptureStatus capture_status)
-{
-    if (capture_status != c10_npu::CaptureStatus::None) {
-        return;
-    }
-
-    const int64_t trigger_count = getHcclOomTriggerCount();
-    if (trigger_count <= 0) {
-        return;
-    }
-
-    const int64_t current_count = ++g_hccl_oom_call_count;
-    if (current_count > trigger_count && current_count < trigger_count + 2) {
-        auto retmsg = std::string("HCCL function error: Failed to allocate memory. "
-            "Injected HCCL OOM after ") + std::to_string(current_count) +
-            " HCCL operations, op type is " + opTypeToString(opType) +
-            ", error code is " + std::to_string(HCCL_E_OOM) + " " + DIST_ERROR(ErrCode::HCCL) + ".";
-        TORCH_CHECK_WITH(OutOfMemoryError, false, retmsg.c_str());
-    }
-}
 bool nslb_is_end = false;
 std::string device_error_msg;
 bool force_stop_error_flag = false;
@@ -3965,7 +3933,6 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collective(
             hcclUs startut = std::chrono::steady_clock::now();
             auto hcclResult = fn(inputs[i], outputs[i], hcclComms[i]->getHcclComm(), hcclStream, work->is_dispatched);
             HCCL_CHECK_ERROR(hcclResult, opTypeToString(opType).c_str());
-            maybeThrowHcclOom(opType, capture_status);
             if (c10_npu::option::OptionsManager::GetMultiStreamMemoryReuse() == c10_npu::option::ERASE_RECORD_STREAM) {
                 work->recorded_outputs_.push_back(
                     std::make_pair(outputs[i].storage().getWeakStorageImpl(), hcclStream));
@@ -4189,7 +4156,6 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::collectiveCoalesced(
             hcclUs startut = std::chrono::steady_clock::now();
             auto hcclResult = fn(inputs[i], outputs[i], hcclComms[0]->getHcclComm(), hcclStream, work->is_dispatched);
             HCCL_CHECK_ERROR(hcclResult, opTypeToString(opType).c_str());
-            maybeThrowHcclOom(opType, capture_status);
             if (c10_npu::option::OptionsManager::GetMultiStreamMemoryReuse() == c10_npu::option::ERASE_RECORD_STREAM) {
                 work->recorded_outputs_.push_back(
                     std::make_pair(outputs[i].storage().getWeakStorageImpl(), hcclStream));
@@ -4446,7 +4412,6 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::pointToPoint(
                 at_npu::native::OpCommand::RunOpApiV3("hcclGroupEnd", hccl_call);
             }
             HCCL_CHECK_ERROR(hcclResult, opTypeToString(opType).c_str());
-            maybeThrowHcclOom(opType, capture_status);
         }
     }
 
@@ -5473,14 +5438,18 @@ c10::intrusive_ptr<c10d::Work> ProcessGroupHCCL::allgather(
                 auto inputDataPtr = input.data_ptr();
                 auto numel = getNumelForHCCL(input);
                 auto hcclType = getHcclDataType(input.scalar_type());
+                auto hccl_call = [inputDataPtr, numel, hcclType, root, comm, stream, is_dispatched]() -> int {
 #ifndef BUILD_LIBTORCH
-                torch_npu::profiler::MstxRange range(
-                    getMstxHcclMsg("HcclBroadcast", numel, hcclType, comm, stream.id(), -1, -1), stream.stream(false),
-                    torch_npu::profiler::DOMAIN_COMMUNICATION);
+                    torch_npu::profiler::MstxRange range(
+                        getMstxHcclMsg("HcclBroadcast", numel, hcclType, comm, stream.id(), -1, -1), stream.stream(false),
+                        torch_npu::profiler::DOMAIN_COMMUNICATION);
 #endif
-                auto hccl_result = hcclBroadcast(inputDataPtr, numel, hcclType, root, comm, stream.stream());
-                *is_dispatched = true;
-                return hccl_result;
+                    auto hccl_result = hcclBroadcast(inputDataPtr, numel, hcclType, root, comm, stream.stream(false));
+                    *is_dispatched = true;
+                    return hccl_result;
+                };
+                at_npu::native::OpCommand::RunOpApiV3("HcclBroadcast", hccl_call, false, &stream);
+                return HCCL_SUCCESS;
                 },
                 c10d::OpType::BROADCAST);
             works.push_back(work);
