@@ -293,6 +293,43 @@ class TestMode(TestCase):
             x = torch.randn(2000, 2000, 200, 20, device="npu:0")
             y = torch.randn(2000, 2000, 200, 20, device="npu:0")
 
+    def test_synthetic_allocator_oom_inject(self):
+        command = [
+            "python",
+            "-c",
+            "import os; "
+            "os.environ['NPU_ALLOCATOR_OOM_TRIGGER_COUNT'] = '1'; "
+            "import torch; import torch_npu; "
+            "torch.empty((1,), device='npu:0')",
+        ]
+        process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, error = process.communicate(timeout=1800)
+        process.stderr.close()
+        process.stdout.close()
+        process.terminate()
+        process.wait()
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("Injected NPU allocator OOM", error)
+
+    def test_synthetic_shared_oom_count_inject(self):
+        command = [
+            "python",
+            "-c",
+            "import os; import torch; import torch_npu; "
+            "x = torch.empty((1,), device='npu:0'); "
+            "os.environ['NPU_OOM_TRIGGER_COUNT'] = '1'; "
+            "(x + 1).cpu()",
+        ]
+        process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, error = process.communicate(timeout=1800)
+        process.stderr.close()
+        process.stdout.close()
+        process.terminate()
+        process.wait()
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("Injected NPU", error)
+        self.assertIn("OOM", error)
+
 
 if __name__ == "__main__":
     run_tests()
