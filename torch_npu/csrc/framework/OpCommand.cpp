@@ -113,6 +113,9 @@ bool shouldThrowOpOom(int device)
     if (!file_triggered && !count_triggered) {
         return false;
     }
+    if (count_triggered) {
+        return true;
+    }
     if (!isOpOomTriggerRepeatable() && g_op_oom_triggered_devices.count(device) > 0) {
         return false;
     }

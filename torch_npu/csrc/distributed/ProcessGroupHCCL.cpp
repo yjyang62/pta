@@ -146,6 +146,9 @@ bool shouldThrowHcclOom(int64_t current_count, int64_t trigger_count)
     if (!file_triggered && !count_triggered) {
         return false;
     }
+    if (count_triggered) {
+        return true;
+    }
     if (!isHcclOomTriggerRepeatable() && g_hccl_oom_triggered.exchange(true)) {
         return false;
     }
